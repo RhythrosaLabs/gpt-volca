@@ -1,5 +1,4 @@
 mido
-openai
 streamlit
 SpeechRecognition
 pyaudio
