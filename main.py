@@ -1,15 +1,17 @@
 # === FILE 1: voice_controlled_volca.py ===
-import mido
 import time
 import json
 import streamlit as st
 import speech_recognition as sr
 from collections import defaultdict
+import mido
+from mido import Message
 
-openai.api_key = 'YOUR_OPENAI_API_KEY'
-
-# Update this to the name of your MIDI output port (use mido.get_output_names())
-MIDI_PORT = mido.open_output(mido.get_output_names()[0])
+# Initialize MIDI output only when needed
+@st.cache_resource
+def get_midi_port():
+    output_name = mido.get_output_names()[0]
+    return mido.open_output(output_name)
 
 loop_layers = defaultdict(list)
 
@@ -36,6 +38,7 @@ device_map = {
 
 device_type = st.radio("Select Volca device", ["drum", "sample"])
 current_device = device_map[device_type]
+midi_port = get_midi_port()
 
 GPT_SYSTEM_PROMPT = f"""
 You are an expert MIDI programmer controlling a Korg Volca {device_type.capitalize()} using Python and mido.
@@ -83,12 +86,11 @@ Always respond with JSON formatted like this:
 Or respond with a command:
 - `{{"command": "clear_loops"}}`
 - `{{"command": "play_loops"}}`
-
-Be creative, musical, and always follow the format.
 """
 
-
 def query_gpt(text):
+    import openai
+    openai.api_key = st.session_state.get("api_key", "")
     messages = [
         {"role": "system", "content": GPT_SYSTEM_PROMPT},
         {"role": "user", "content": text}
@@ -111,7 +113,7 @@ def play_all_loops():
         for note, layers in loop_layers.items():
             active = any(p[i % len(p)] for p in layers)
             msg_type = 'note_on' if active else 'note_off'
-            MIDI_PORT.send(mido.Message(msg_type, note=note, velocity=127 if active else 0, channel=0))
+            midi_port.send(Message(msg_type, note=note, velocity=127 if active else 0, channel=0))
         time.sleep(0.1)
 
 def merge_patterns(base, new):
@@ -127,12 +129,12 @@ def send_to_volca(data):
 
         for i in range(len(pattern)):
             msg_type = 'note_on' if pattern[i] == 1 else 'note_off'
-            MIDI_PORT.send(mido.Message(msg_type, note=note, velocity=127 if pattern[i] == 1 else 0))
+            midi_port.send(Message(msg_type, note=note, velocity=127 if pattern[i] == 1 else 0))
             time.sleep(0.1)
 
         for cc, val in step.get("cc", {}).items():
             if cc in current_device["cc"]:
-                MIDI_PORT.send(mido.Message('control_change', control=current_device["cc"][cc], value=val))
+                midi_port.send(Message('control_change', control=current_device["cc"][cc], value=val))
                 time.sleep(0.05)
 
 def recognize_speech():
@@ -152,6 +154,12 @@ def recognize_speech():
 
 # === STREAMLIT UI ===
 st.title("GPT-Controlled Volca")
+
+st.sidebar.title("OpenAI Key")
+api_key_input = st.sidebar.text_input("OpenAI API Key", type="password")
+if api_key_input:
+    st.session_state["api_key"] = api_key_input
+
 user_input = st.text_input("Describe a beat, sequence, or modulation pattern:")
 
 if st.button("Use Voice Input"):
