@@ -1,6 +1,5 @@
 # === FILE 1: voice_controlled_volca.py ===
 import mido
-import openai
 import time
 import json
 import streamlit as st
