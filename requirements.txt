@@ -1,3 +1,6 @@
-mido
 streamlit
+mido
+python-rtmidi
+speechrecognition
 pyaudio
+openai
