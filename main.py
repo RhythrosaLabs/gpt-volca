@@ -7,36 +7,88 @@ import time
 from io import BytesIO
 from PIL import Image
 
-# OpenAI and DALL-E setup
-CHAT_API_URL = "https://api.openai.com/v1/chat/completions"
-DALLE_API_URL = "https://api.openai.com/v1/images/generations"
+# OpenRouter setup
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+IMAGE_API_URL = "https://api.openai.com/v1/images/generations"  # Keep DALL-E for images
 API_KEY_FILE = "api_key.json"
 
-def load_api_key():
-    """Load API key from file if it exists"""
+# Available models on OpenRouter
+OPENROUTER_MODELS = {
+    "OpenAI": [
+        {"id": "openai/gpt-4-turbo", "name": "GPT-4 Turbo"},
+        {"id": "openai/gpt-4", "name": "GPT-4"},
+        {"id": "openai/gpt-3.5-turbo", "name": "GPT-3.5 Turbo"}
+    ],
+    "Anthropic": [
+        {"id": "anthropic/claude-3-opus", "name": "Claude 3 Opus"},
+        {"id": "anthropic/claude-3-sonnet", "name": "Claude 3 Sonnet"},
+        {"id": "anthropic/claude-3-haiku", "name": "Claude 3 Haiku"},
+        {"id": "anthropic/claude-2", "name": "Claude 2"}
+    ],
+    "Meta": [
+        {"id": "meta-llama/llama-3-70b-instruct", "name": "Llama 3 70B Instruct"},
+        {"id": "meta-llama/llama-3-8b-instruct", "name": "Llama 3 8B Instruct"},
+        {"id": "meta-llama/llama-2-70b-chat", "name": "Llama 2 70B Chat"}
+    ],
+    "Mistral": [
+        {"id": "mistralai/mistral-large", "name": "Mistral Large"},
+        {"id": "mistralai/mistral-7b-instruct", "name": "Mistral 7B Instruct"},
+        {"id": "mistralai/mixtral-8x7b-instruct", "name": "Mixtral 8x7B Instruct"}
+    ],
+    "DeepSeek": [
+        {"id": "deepseek/deepseek-coder", "name": "DeepSeek Coder"},
+        {"id": "deepseek/deepseek-llm-67b-chat", "name": "DeepSeek LLM 67B Chat"}
+    ],
+    "Google": [
+        {"id": "google/gemini-pro", "name": "Gemini Pro"}
+    ],
+    "Other": [
+        {"id": "cohere/command-r-plus", "name": "Cohere Command R+"},
+        {"id": "perplexity/sonar-small-online", "name": "Perplexity Sonar Small"},
+        {"id": "phind/phind-codellama-34b", "name": "Phind CodeLlama 34B"}
+    ]
+}
+
+# Image generation models
+IMAGE_MODELS = [
+    {"id": "dall-e-3", "name": "DALL-E 3"},
+    {"id": "dall-e-2", "name": "DALL-E 2"},
+    {"id": "sdxl", "name": "Stable Diffusion XL"}
+]
+
+def load_api_keys():
+    """Load API keys from file if it exists"""
     if os.path.exists(API_KEY_FILE):
         try:
             with open(API_KEY_FILE, 'r') as file:
                 data = json.load(file)
-                return data.get('api_key')
+                return {
+                    "openrouter_api_key": data.get('openrouter_api_key', ''),
+                    "dalle_api_key": data.get('dalle_api_key', '')
+                }
         except Exception:
-            return None
-    return None
+            return {"openrouter_api_key": "", "dalle_api_key": ""}
+    return {"openrouter_api_key": "", "dalle_api_key": ""}
 
-def save_api_key(api_key):
-    """Save API key to file"""
+def save_api_keys(openrouter_api_key, dalle_api_key):
+    """Save API keys to file"""
     with open(API_KEY_FILE, 'w') as file:
-        json.dump({"api_key": api_key}, file)
+        json.dump({
+            "openrouter_api_key": openrouter_api_key,
+            "dalle_api_key": dalle_api_key
+        }, file)
 
-def generate_content(api_key, prompt, action):
-    """Generate text content using GPT-4"""
+def generate_content(api_key, prompt, action, model):
+    """Generate text content using OpenRouter"""
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://comic-book-creator.streamlit.app",  # Replace with your domain
+        "X-Title": "Comic Book Creator"
     }
     
     data = {
-        "model": "gpt-4",
+        "model": model,
         "messages": [
             {"role": "system", "content": f"You are a helpful assistant specializing in {action}."},
             {"role": "user", "content": prompt}
@@ -44,7 +96,7 @@ def generate_content(api_key, prompt, action):
     }
 
     try:
-        response = requests.post(CHAT_API_URL, headers=headers, json=data)
+        response = requests.post(OPENROUTER_API_URL, headers=headers, json=data)
         response.raise_for_status()
         response_data = response.json()
         if "choices" not in response_data:
@@ -55,27 +107,30 @@ def generate_content(api_key, prompt, action):
         return content_text
 
     except requests.RequestException as e:
-        return f"Error: Unable to communicate with the OpenAI API. {str(e)}"
+        return f"Error: Unable to communicate with OpenRouter API. {str(e)}"
 
-def generate_image(api_key, prompt, size="1024x1024"):
-    """Generate image using DALL-E"""
+def generate_image(api_key, prompt, image_model="dall-e-3", size="1024x1024"):
+    """Generate image using selected image model"""
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
     data = {
-        "model": "dall-e-3",
+        "model": image_model,
         "prompt": prompt,
         "n": 1,
         "size": size,
-        "quality": "hd",
-        "style": "vivid",
+        "quality": "hd" if image_model == "dall-e-3" else "standard",
+        "style": "vivid" if image_model in ["dall-e-3", "dall-e-2"] else None,
         "response_format": "url"
     }
     
+    # Remove None values from data
+    data = {k: v for k, v in data.items() if v is not None}
+    
     try:
-        response = requests.post(DALLE_API_URL, headers=headers, json=data)
+        response = requests.post(IMAGE_API_URL, headers=headers, json=data)
         response.raise_for_status()
         response_data = response.json()
         image_url = response_data['data'][0]['url']
@@ -124,7 +179,7 @@ def create_zip(content_dict):
     zip_buffer.seek(0)
     return zip_buffer.read()
 
-def generate_comic_book(api_key, user_prompt, progress_placeholder):
+def generate_comic_book(openrouter_api_key, dalle_api_key, user_prompt, text_model, image_model, progress_placeholder):
     """Generate a complete comic book based on user prompt"""
     comic_book = {}
     
@@ -136,13 +191,13 @@ def generate_comic_book(api_key, user_prompt, progress_placeholder):
         # Step 1: Generate comic book concept
         status_text.text("Generating comic book concept...")
         progress_bar.progress(10)
-        comic_concept = generate_content(api_key, f"Create a detailed comic book concept based on the following prompt: {user_prompt}.", "comic book concept creation")
+        comic_concept = generate_content(openrouter_api_key, f"Create a detailed comic book concept based on the following prompt: {user_prompt}.", "comic book concept creation", text_model)
         comic_book['comic_concept'] = comic_concept
         
         # Step 2: Generate detailed plot
         status_text.text("Generating detailed plot...")
         progress_bar.progress(20)
-        comic_book['plot'] = generate_content(api_key, f"Create a detailed plot for the comic book: {comic_concept}", "comic book plot development")
+        comic_book['plot'] = generate_content(openrouter_api_key, f"Create a detailed plot for the comic book: {comic_concept}", "comic book plot development", text_model)
         
         # Step 3: Generate character designs
         status_text.text("Generating character designs...")
@@ -150,14 +205,14 @@ def generate_comic_book(api_key, user_prompt, progress_placeholder):
         character_designs = {}
         
         character_prompt = f"Full-body character design for the comic book, based on the following description: {comic_concept}"
-        image_url = generate_image(api_key, character_prompt)
+        image_url = generate_image(dalle_api_key, character_prompt, image_model)
         if image_url:
             image_data = download_image(image_url)
             if image_data:
                 character_designs["character_1.png"] = image_data
         
         character_prompt_2 = f"Another full-body character design for the comic book, based on the following description: {comic_concept}"
-        image_url = generate_image(api_key, character_prompt_2)
+        image_url = generate_image(dalle_api_key, character_prompt_2, image_model)
         if image_url:
             image_data = download_image(image_url)
             if image_data:
@@ -171,14 +226,14 @@ def generate_comic_book(api_key, user_prompt, progress_placeholder):
         comic_panels = {}
         
         panel_prompt_1 = f"Comic panel illustrating a key scene from the comic book, based on the following description: {comic_concept}"
-        image_url = generate_image(api_key, panel_prompt_1)
+        image_url = generate_image(dalle_api_key, panel_prompt_1, image_model)
         if image_url:
             image_data = download_image(image_url)
             if image_data:
                 comic_panels["panel_1.png"] = image_data
         
         panel_prompt_2 = f"Comic panel illustrating another key scene from the comic book, based on the following description: {comic_concept}"
-        image_url = generate_image(api_key, panel_prompt_2)
+        image_url = generate_image(dalle_api_key, panel_prompt_2, image_model)
         if image_url:
             image_data = download_image(image_url)
             if image_data:
@@ -192,7 +247,7 @@ def generate_comic_book(api_key, user_prompt, progress_placeholder):
         cover_page = {}
         
         cover_prompt = f"Cover page for the comic book, based on the following description: {comic_concept}"
-        image_url = generate_image(api_key, cover_prompt)
+        image_url = generate_image(dalle_api_key, cover_prompt, image_model)
         if image_url:
             image_data = download_image(image_url)
             if image_data:
@@ -203,7 +258,7 @@ def generate_comic_book(api_key, user_prompt, progress_placeholder):
         # Step 6: Generate recap
         status_text.text("Generating recap...")
         progress_bar.progress(80)
-        comic_book['recap'] = generate_content(api_key, f"Recap the comic book content: {comic_concept}", "comic book recap")
+        comic_book['recap'] = generate_content(openrouter_api_key, f"Recap the comic book content: {comic_concept}", "comic book recap", text_model)
         
         # Step 7: Generate master document
         status_text.text("Generating master document...")
@@ -232,31 +287,68 @@ def main():
     )
     
     st.title("Comic Book Creator")
-    st.markdown("Generate custom comic books using AI!")
+    st.markdown("Generate custom comic books using AI with OpenRouter Models!")
     
     # API Key setup
-    api_key = load_api_key()
+    api_keys = load_api_keys()
     
     with st.sidebar:
         st.header("Settings")
-        saved_api_key = st.text_input("OpenAI API Key", value=api_key if api_key else "", type="password")
-        if st.button("Save API Key"):
-            save_api_key(saved_api_key)
-            st.success("API key saved!")
-            api_key = saved_api_key
+        
+        st.subheader("API Keys")
+        openrouter_api_key = st.text_input("OpenRouter API Key", 
+                                         value=api_keys["openrouter_api_key"] if api_keys["openrouter_api_key"] else "", 
+                                         type="password",
+                                         help="Get your key at https://openrouter.ai/keys")
+        
+        dalle_api_key = st.text_input("DALL-E API Key (for images)", 
+                                    value=api_keys["dalle_api_key"] if api_keys["dalle_api_key"] else "", 
+                                    type="password",
+                                    help="Get your key at https://platform.openai.com/api-keys")
+        
+        if st.button("Save API Keys"):
+            save_api_keys(openrouter_api_key, dalle_api_key)
+            st.success("API keys saved!")
+        
+        st.subheader("Model Selection")
+        
+        # Text model selection
+        st.markdown("#### Text Model")
+        category = st.selectbox("Provider", options=list(OPENROUTER_MODELS.keys()))
+        
+        model_options = [(model["id"], model["name"]) for model in OPENROUTER_MODELS[category]]
+        text_model = st.selectbox(
+            "Text Model",
+            options=[model[0] for model in model_options],
+            format_func=lambda x: next((model[1] for model in model_options if model[0] == x), x)
+        )
+        
+        # Image model selection
+        st.markdown("#### Image Model")
+        image_model = st.selectbox(
+            "Image Model",
+            options=[model["id"] for model in IMAGE_MODELS],
+            format_func=lambda x: next((model["name"] for model in IMAGE_MODELS if model["id"] == x), x)
+        )
     
     # Main content
     prompt = st.text_input("Enter your comic book idea:", placeholder="e.g., A superhero who can control time but ages faster when using powers")
     
-    if st.button("Generate Comic Book"):
-        if not api_key:
-            st.error("Please enter an OpenAI API key in the settings panel.")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        generate_button = st.button("Generate Comic Book", type="primary", use_container_width=True)
+    
+    if generate_button:
+        if not openrouter_api_key:
+            st.error("Please enter an OpenRouter API key in the settings panel.")
+        elif not dalle_api_key:
+            st.error("Please enter a DALL-E API key in the settings panel.")
         elif not prompt:
             st.warning("Please enter a comic book idea.")
         else:
             with st.expander("Generation Progress", expanded=True):
                 progress_placeholder = st.empty()
-                comic_book = generate_comic_book(api_key, prompt, progress_placeholder)
+                comic_book = generate_comic_book(openrouter_api_key, dalle_api_key, prompt, text_model, image_model, progress_placeholder)
                 
                 if comic_book:
                     # Show preview
