@@ -1,186 +1,205 @@
-# === FILE 1: voice_controlled_volca.py ===
-import time
+import sys
 import json
-import streamlit as st
-import speech_recognition as sr
-from collections import defaultdict
-import mido
-from mido import Message
+import openai
+import os
+import base64
+import requests
+from PyQt5.QtWidgets import (
+    QApplication, QFrame, QMainWindow, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QComboBox, QLineEdit, QTextEdit, QFileDialog, QMessageBox, QInputDialog
+)
+from PyQt5.QtGui import QPixmap, QImage
+from PyQt5.QtCore import Qt
+from urllib.request import urlopen
 
-# Initialize MIDI output only when needed
-@st.cache_resource
-def get_midi_port():
-    output_name = mido.get_output_names()[0]
-    return mido.open_output(output_name)
+# muse code file imports
+from image_saver import ImageSaver
+from constants import API_KEY_FILE, DALLE_API_ENDPOINT, CHAT_API_ENDPOINT, GPT_IMAGE_API_ENDPOINT
+from api_key_manager import APIKeyManager
 
-loop_layers = defaultdict(list)
+# main
+class OpenAIGUI(QMainWindow, ImageSaver):
+    def __init__(self):
+        super().__init__()
+        self.api_key_manager = APIKeyManager(self)
+        self.initUI()
+        self.encoded_image = None  # Attribute to store the base64 encoded image
+        self.image_analysis_result = None  # Attribute to store image analysis result
 
-device_map = {
-    "drum": {
-        "notes": list(range(36, 46)),
-        "cc": {
-            "pitch": 40, "mod_amount": 41, "mod_rate": 42, "decay": 43, "attack": 44,
-            "wave_guide": 46, "pan": 47, "level": 48, "drive": 49, "overdrive": 50,
-            "rate": 51, "bitcrush": 52, "wavefold": 53, "reverb": 54, "delay": 55,
-            "distortion": 56, "feedback": 57, "lfo_depth": 58, "lfo_rate": 59,
-            "transpose": 60, "glide": 61, "cutoff": 62, "resonance": 63, "grain": 64,
-            "formant": 65, "shimmer": 66, "blur": 67, "gate": 68, "fx_mix": 69
+    def initUI(self):
+        self.setWindowTitle('OpenAI Integration GUI')
+        self.setGeometry(100, 100, 1000, 600)
+
+        main_widget = QWidget(self)
+        self.setCentralWidget(main_widget)
+        main_layout = QHBoxLayout(main_widget)
+
+        self.image_layout = QVBoxLayout()
+        main_layout.addLayout(self.image_layout)
+
+        self.uploaded_image_label = QLabel("Uploaded Image")
+        self.configure_image_label(self.uploaded_image_label)
+        self.generated_image_label = QLabel("Generated Image")
+        self.configure_image_label(self.generated_image_label)
+
+        self.image_layout.addWidget(self.uploaded_image_label)  # Moved the uploaded image label here
+
+        self.add_button("Upload Image", self.upload_image, self.image_layout)  # Added upload button
+
+        self.image_layout.addWidget(self.generated_image_label)  # Moved the generated image label here
+
+        self.interaction_layout = QVBoxLayout()
+        main_layout.addLayout(self.interaction_layout)
+
+        self.model_label = QLabel("Select Model:")
+        self.interaction_layout.addWidget(self.model_label)
+
+        self.model_combo = QComboBox()
+        models = [
+            "gpt-4",
+            "gpt-3.5-turbo",
+            "gpt-4-turbo",
+            "gpt-3.5-turbo-16k",
+            "dalle-3",
+            "gpt-4o"
+        ]
+        self.model_combo.addItems(models)
+        self.interaction_layout.addWidget(self.model_combo)
+
+        self.prompt_entry = QLineEdit()
+        self.interaction_layout.addWidget(self.prompt_entry)
+
+        self.size_dropdown = QComboBox()
+        self.size_dropdown.addItems(["1024x1024", "1024x1792", "1792x1024"])
+        self.interaction_layout.addWidget(self.size_dropdown)
+
+        self.quality_dropdown = QComboBox()
+        self.quality_dropdown.addItems(["standard", "hd"])
+        self.interaction_layout.addWidget(self.quality_dropdown)
+
+        buttons_layout = QHBoxLayout()
+        self.add_button("Analyze Image", self.analyze_image, buttons_layout)
+        self.add_button("Generate Image", self.generate_dalle_image, buttons_layout)
+        self.add_button("ChatGPT Send", self.chat_with_gpt, buttons_layout)
+        self.interaction_layout.addLayout(buttons_layout)
+
+        self.add_button("Save Generated Image", self.save_generated_image, self.image_layout)
+
+        self.response_text = QTextEdit()
+        self.interaction_layout.addWidget(self.response_text)
+
+    def configure_image_label(self, label):
+        label.setFrameStyle(QFrame.Sunken | QFrame.StyledPanel)
+        label.setAlignment(Qt.AlignCenter)
+        label.setFixedSize(200, 200)
+        self.image_layout.addWidget(label)
+
+    def add_button(self, text, handler, layout):
+        button = QPushButton(text)
+        button.clicked.connect(handler)
+        layout.addWidget(button)
+
+    def upload_image(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Image", "", "Image Files (*.png *.jpg *.jpeg *.bmp)")
+        if file_path:
+            self.display_image(file_path, self.uploaded_image_label)
+
+    def display_image(self, file_path, image_label):
+        image = QImage(file_path)
+        pixmap = QPixmap.fromImage(image)
+        pixmap = pixmap.scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        image_label.setPixmap(pixmap)
+        self.encoded_image = self.encode_image(file_path)
+
+    def encode_image(self, image_path):
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode('utf-8')
+
+    def analyze_image(self):
+        if self.encoded_image:
+            self.perform_image_analysis(self.encoded_image)
+        else:
+            QMessageBox.warning(self, "Warning", "Please upload an image first.")
+
+    def perform_image_analysis(self, base64_image):
+        headers = {"Authorization": f"Bearer {self.api_key_manager.api_key}"}
+        payload = {
+            "model": "gpt-4-vision-preview",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What’s in this image?"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    ]
+                }
+            ],
+            "max_tokens": 1000
         }
-    },
-    "sample": {
-        "notes": list(range(0, 10)),
-        "cc": {
-            "level": 7, "start_point": 39, "length": 40, "hi_cut": 41, "speed": 42,
-            "pitch_eg_int": 43, "attack": 44, "decay": 45, "sample_select": 46
-        }
-    }
-}
-
-device_type = st.radio("Select Volca device", ["drum", "sample"])
-current_device = device_map[device_type]
-midi_port = get_midi_port()
-
-GPT_SYSTEM_PROMPT = f"""
-You are an expert MIDI programmer controlling a Korg Volca {device_type.capitalize()} using Python and mido.
-
-### DEVICE OVERVIEW
-- You can send NOTE ON/OFF messages on channel 0.
-- You can send CONTROL CHANGE (CC) messages using the following parameter map:
-  {json.dumps(current_device['cc'], indent=2)}
-- You can trigger parts using these MIDI note numbers:
-  {current_device['notes']}
-
-### BEHAVIOR GUIDELINES
-- You understand rhythmic structures and genres (e.g. techno, house, IDM, trap, ambient, glitch).
-- You can generate polyrhythmic and polymetric loops.
-- You understand dynamics and transitions (intro, build, drop, fill, breakdown).
-- You can vary velocity/intensity and CC automation for expressive sequences.
-- You can build on existing patterns by merging new layers.
-- You can respond to text or voice commands like:
-  - "clear all loops"
-  - "play all loops"
-  - "create a new techno loop with reverb"
-  - "add a glitchy snare fill"
-  - "modulate pitch and pan every 2 steps"
-
-### OUTPUT FORMAT
-Always respond with JSON formatted like this:
-{{
-  "bpm": 120,
-  "steps": [
-    {{
-      "note": 36,
-      "pattern": [1,0,1,0,1,0,1,0],
-      "cc": {{
-        "pitch": 64,
-        "pan": 100
-      }}
-    }},
-    {{
-      "note": 38,
-      "pattern": [0,0,1,0,0,1,0,1]
-    }}
-  ]
-}}
-
-Or respond with a command:
-- `{{"command": "clear_loops"}}`
-- `{{"command": "play_loops"}}`
-"""
-
-def query_gpt(text):
-    import openai
-    openai.api_key = st.session_state.get("api_key", "")
-    messages = [
-        {"role": "system", "content": GPT_SYSTEM_PROMPT},
-        {"role": "user", "content": text}
-    ]
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=messages
-    )
-    return response["choices"][0]["message"]["content"]
-
-def record_loop(note, pattern):
-    loop_layers[note].append(pattern)
-
-def clear_loops():
-    loop_layers.clear()
-
-def play_all_loops():
-    max_len = max(len(p) for patterns in loop_layers.values() for p in patterns)
-    for i in range(max_len):
-        for note, layers in loop_layers.items():
-            active = any(p[i % len(p)] for p in layers)
-            msg_type = 'note_on' if active else 'note_off'
-            midi_port.send(Message(msg_type, note=note, velocity=127 if active else 0, channel=0))
-        time.sleep(0.1)
-
-def merge_patterns(base, new):
-    return [max(b, n) for b, n in zip(base, new)]
-
-def send_to_volca(data):
-    for step in data.get("steps", []):
-        note = step["note"]
-        pattern = step["pattern"]
-        existing = loop_layers[note][-1] if loop_layers[note] else []
-        merged = merge_patterns(existing, pattern) if existing else pattern
-        record_loop(note, merged)
-
-        for i in range(len(pattern)):
-            msg_type = 'note_on' if pattern[i] == 1 else 'note_off'
-            midi_port.send(Message(msg_type, note=note, velocity=127 if pattern[i] == 1 else 0))
-            time.sleep(0.1)
-
-        for cc, val in step.get("cc", {}).items():
-            if cc in current_device["cc"]:
-                midi_port.send(Message('control_change', control=current_device["cc"][cc], value=val))
-                time.sleep(0.05)
-
-def recognize_speech():
-    recognizer = sr.Recognizer()
-    with sr.Microphone() as source:
-        st.info("Listening for voice input...")
-        audio = recognizer.listen(source)
         try:
-            text = recognizer.recognize_google(audio)
-            st.success(f"You said: {text}")
-            return text
-        except sr.UnknownValueError:
-            st.error("Could not understand audio")
-        except sr.RequestError as e:
-            st.error(f"Speech recognition error: {e}")
-    return ""
+            response = requests.post(CHAT_API_ENDPOINT, headers=headers, json=payload)
+            if response.status_code == 200 and 'choices' in response.json():
+                description = response.json()['choices'][0]['message']['content']
+                self.response_text.append(description + "\n\n")
+                self.image_analysis_result = description
+            else:
+                self.response_text.append("Failed to analyze the image.\n\n")
+        except Exception as e:
+            self.response_text.append(f"An error occurred: {e}\n\n")
 
-# === STREAMLIT UI ===
-st.title("GPT-Controlled Volca")
+    def generate_dalle_image(self):
+        # Ensure the API key is set (assuming self.api_key_manager is your APIKeyManager instance)
+        if not self.api_key_manager.api_key:
+            self.append_response("API key is not set. Please set the API key and try again.")
+            return
 
-st.sidebar.title("OpenAI Key")
-api_key_input = st.sidebar.text_input("OpenAI API Key", type="password")
-if api_key_input:
-    st.session_state["api_key"] = api_key_input
+        # Explicitly set the API key (optional if APIKeyManager already does this)
+        openai.api_key = self.api_key_manager.api_key
+        prompt, size, quality = self.prompt_entry.text(), self.size_dropdown.currentText(), self.quality_dropdown.currentText()
+        try:
+            response = openai.Image.create(model="dall-e-3", prompt=prompt, size=size, quality=quality, n=1)
+            if response.data:
+                self.display_dalle_image(response.data[0].url, self.generated_image_label)
+            else:
+                self.append_response("Failed to generate image or no data returned.")
+        except Exception as e:
+            self.append_response(f"An error occurred: {e}")
 
-user_input = st.text_input("Describe a beat, sequence, or modulation pattern:")
+    def display_dalle_image(self, image_url, image_label):
+        try:
+            image_data = urlopen(image_url).read()
+            image = QImage()
+            if image.loadFromData(image_data):
+                pixmap = QPixmap.fromImage(image).scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                image_label.setPixmap(pixmap)
+            else:
+                self.append_response("Failed to load image data.")
+        except Exception as e:
+            self.append_response(f"Failed to display image: {e}")
 
-if st.button("Use Voice Input"):
-    voice_input = recognize_speech()
-    if voice_input:
-        user_input = voice_input
+    def append_response(self, message):
+        self.response_text.append(f"{message}\n\n")
 
-if st.button("Send to Volca"):
-    if user_input:
-        with st.spinner("Generating sequence with GPT..."):
-            try:
-                gpt_response = query_gpt(user_input)
-                parsed = json.loads(gpt_response)
-                if parsed.get("command") == "clear_loops":
-                    clear_loops()
-                    st.success("Cleared all loops.")
-                elif parsed.get("command") == "play_loops":
-                    play_all_loops()
-                    st.success("Playing all loops.")
-                else:
-                    send_to_volca(parsed)
-                    st.success("Sequence sent to Volca!")
-            except Exception as e:
-                st.error(f"Error: {e}")
+    def chat_with_gpt(self):
+        prompt = self.prompt_entry.text()
+        model = self.model_combo.currentText()  # Get the selected model
+        chat_history = [{"role": "system", "content": "Image analysis: " + self.image_analysis_result}] if self.image_analysis_result else []
+        chat_history.append({"role": "user", "content": prompt})
+
+        headers = {"Authorization": f"Bearer {self.api_key_manager.api_key}"}
+        payload = {"model": model, "messages": chat_history, "max_tokens": 2000}
+
+        try:
+            response = requests.post(CHAT_API_ENDPOINT, headers=headers, json=payload).json()
+            chat_response = response.get('choices', [{}])[0].get('message', {}).get('content', "Failed to get a response.")
+            self.response_text.append(f"{chat_response}\n\n")
+        except Exception as e:
+            self.response_text.append(f"An error occurred: {e}\n\n")
+
+def main():
+    app = QApplication(sys.argv)
+    ex = OpenAIGUI()
+    ex.show()
+    sys.exit(app.exec_())
+
+if __name__ == '__main__':
+    main()
