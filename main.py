@@ -1,205 +1,309 @@
-import sys
+import streamlit as st
 import json
-import openai
-import os
-import base64
 import requests
-from PyQt5.QtWidgets import (
-    QApplication, QFrame, QMainWindow, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QComboBox, QLineEdit, QTextEdit, QFileDialog, QMessageBox, QInputDialog
-)
-from PyQt5.QtGui import QPixmap, QImage
-from PyQt5.QtCore import Qt
-from urllib.request import urlopen
+import zipfile
+import os
+import time
+from io import BytesIO
+from PIL import Image
 
-# muse code file imports
-from image_saver import ImageSaver
-from constants import API_KEY_FILE, DALLE_API_ENDPOINT, CHAT_API_ENDPOINT, GPT_IMAGE_API_ENDPOINT
-from api_key_manager import APIKeyManager
+# OpenAI and DALL-E setup
+CHAT_API_URL = "https://api.openai.com/v1/chat/completions"
+DALLE_API_URL = "https://api.openai.com/v1/images/generations"
+API_KEY_FILE = "api_key.json"
 
-# main
-class OpenAIGUI(QMainWindow, ImageSaver):
-    def __init__(self):
-        super().__init__()
-        self.api_key_manager = APIKeyManager(self)
-        self.initUI()
-        self.encoded_image = None  # Attribute to store the base64 encoded image
-        self.image_analysis_result = None  # Attribute to store image analysis result
+def load_api_key():
+    """Load API key from file if it exists"""
+    if os.path.exists(API_KEY_FILE):
+        try:
+            with open(API_KEY_FILE, 'r') as file:
+                data = json.load(file)
+                return data.get('api_key')
+        except Exception:
+            return None
+    return None
 
-    def initUI(self):
-        self.setWindowTitle('OpenAI Integration GUI')
-        self.setGeometry(100, 100, 1000, 600)
+def save_api_key(api_key):
+    """Save API key to file"""
+    with open(API_KEY_FILE, 'w') as file:
+        json.dump({"api_key": api_key}, file)
 
-        main_widget = QWidget(self)
-        self.setCentralWidget(main_widget)
-        main_layout = QHBoxLayout(main_widget)
-
-        self.image_layout = QVBoxLayout()
-        main_layout.addLayout(self.image_layout)
-
-        self.uploaded_image_label = QLabel("Uploaded Image")
-        self.configure_image_label(self.uploaded_image_label)
-        self.generated_image_label = QLabel("Generated Image")
-        self.configure_image_label(self.generated_image_label)
-
-        self.image_layout.addWidget(self.uploaded_image_label)  # Moved the uploaded image label here
-
-        self.add_button("Upload Image", self.upload_image, self.image_layout)  # Added upload button
-
-        self.image_layout.addWidget(self.generated_image_label)  # Moved the generated image label here
-
-        self.interaction_layout = QVBoxLayout()
-        main_layout.addLayout(self.interaction_layout)
-
-        self.model_label = QLabel("Select Model:")
-        self.interaction_layout.addWidget(self.model_label)
-
-        self.model_combo = QComboBox()
-        models = [
-            "gpt-4",
-            "gpt-3.5-turbo",
-            "gpt-4-turbo",
-            "gpt-3.5-turbo-16k",
-            "dalle-3",
-            "gpt-4o"
+def generate_content(api_key, prompt, action):
+    """Generate text content using GPT-4"""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "model": "gpt-4",
+        "messages": [
+            {"role": "system", "content": f"You are a helpful assistant specializing in {action}."},
+            {"role": "user", "content": prompt}
         ]
-        self.model_combo.addItems(models)
-        self.interaction_layout.addWidget(self.model_combo)
+    }
 
-        self.prompt_entry = QLineEdit()
-        self.interaction_layout.addWidget(self.prompt_entry)
+    try:
+        response = requests.post(CHAT_API_URL, headers=headers, json=data)
+        response.raise_for_status()
+        response_data = response.json()
+        if "choices" not in response_data:
+            error_message = response_data.get("error", {}).get("message", "Unknown error")
+            return f"Error: {error_message}"
 
-        self.size_dropdown = QComboBox()
-        self.size_dropdown.addItems(["1024x1024", "1024x1792", "1792x1024"])
-        self.interaction_layout.addWidget(self.size_dropdown)
+        content_text = response_data["choices"][0]["message"]["content"]
+        return content_text
 
-        self.quality_dropdown = QComboBox()
-        self.quality_dropdown.addItems(["standard", "hd"])
-        self.interaction_layout.addWidget(self.quality_dropdown)
+    except requests.RequestException as e:
+        return f"Error: Unable to communicate with the OpenAI API. {str(e)}"
 
-        buttons_layout = QHBoxLayout()
-        self.add_button("Analyze Image", self.analyze_image, buttons_layout)
-        self.add_button("Generate Image", self.generate_dalle_image, buttons_layout)
-        self.add_button("ChatGPT Send", self.chat_with_gpt, buttons_layout)
-        self.interaction_layout.addLayout(buttons_layout)
+def generate_image(api_key, prompt, size="1024x1024"):
+    """Generate image using DALL-E"""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "model": "dall-e-3",
+        "prompt": prompt,
+        "n": 1,
+        "size": size,
+        "quality": "hd",
+        "style": "vivid",
+        "response_format": "url"
+    }
+    
+    try:
+        response = requests.post(DALLE_API_URL, headers=headers, json=data)
+        response.raise_for_status()
+        response_data = response.json()
+        image_url = response_data['data'][0]['url']
+        return image_url
+    except requests.RequestException as e:
+        st.error(f"Error generating image: {str(e)}")
+        return None
 
-        self.add_button("Save Generated Image", self.save_generated_image, self.image_layout)
+def download_image(image_url):
+    """Download image from URL"""
+    try:
+        response = requests.get(image_url)
+        response.raise_for_status()
+        return response.content
+    except requests.RequestException as e:
+        st.error(f"Error downloading image: {str(e)}")
+        return None
 
-        self.response_text = QTextEdit()
-        self.interaction_layout.addWidget(self.response_text)
-
-    def configure_image_label(self, label):
-        label.setFrameStyle(QFrame.Sunken | QFrame.StyledPanel)
-        label.setAlignment(Qt.AlignCenter)
-        label.setFixedSize(200, 200)
-        self.image_layout.addWidget(label)
-
-    def add_button(self, text, handler, layout):
-        button = QPushButton(text)
-        button.clicked.connect(handler)
-        layout.addWidget(button)
-
-    def upload_image(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open Image", "", "Image Files (*.png *.jpg *.jpeg *.bmp)")
-        if file_path:
-            self.display_image(file_path, self.uploaded_image_label)
-
-    def display_image(self, file_path, image_label):
-        image = QImage(file_path)
-        pixmap = QPixmap.fromImage(image)
-        pixmap = pixmap.scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        image_label.setPixmap(pixmap)
-        self.encoded_image = self.encode_image(file_path)
-
-    def encode_image(self, image_path):
-        with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode('utf-8')
-
-    def analyze_image(self):
-        if self.encoded_image:
-            self.perform_image_analysis(self.encoded_image)
+def create_master_document(comic_book):
+    """Create a master document summarizing the comic book contents"""
+    master_doc = "# Comic Book Master Document\n\n"
+    for key, value in comic_book.items():
+        if key == "character_designs" or key == "comic_panels" or key == "cover_page":
+            master_doc += f"## {key.replace('_', ' ').title()}\n"
+            master_doc += "See attached images.\n\n"
         else:
-            QMessageBox.warning(self, "Warning", "Please upload an image first.")
-
-    def perform_image_analysis(self, base64_image):
-        headers = {"Authorization": f"Bearer {self.api_key_manager.api_key}"}
-        payload = {
-            "model": "gpt-4-vision-preview",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "What’s in this image?"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                    ]
-                }
-            ],
-            "max_tokens": 1000
-        }
-        try:
-            response = requests.post(CHAT_API_ENDPOINT, headers=headers, json=payload)
-            if response.status_code == 200 and 'choices' in response.json():
-                description = response.json()['choices'][0]['message']['content']
-                self.response_text.append(description + "\n\n")
-                self.image_analysis_result = description
+            master_doc += f"## {key.replace('_', ' ').title()}\n"
+            if isinstance(value, str):
+                master_doc += f"{value}\n\n"
             else:
-                self.response_text.append("Failed to analyze the image.\n\n")
-        except Exception as e:
-            self.response_text.append(f"An error occurred: {e}\n\n")
+                master_doc += "See attached document.\n\n"
+    return master_doc
 
-    def generate_dalle_image(self):
-        # Ensure the API key is set (assuming self.api_key_manager is your APIKeyManager instance)
-        if not self.api_key_manager.api_key:
-            self.append_response("API key is not set. Please set the API key and try again.")
-            return
+def create_zip(content_dict):
+    """Create a ZIP file containing all comic book assets"""
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for key, value in content_dict.items():
+            if isinstance(value, str):
+                zip_file.writestr(f"{key}.txt", value)
+            elif isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    if isinstance(sub_value, bytes):
+                        zip_file.writestr(f"{key}/{sub_key}", sub_value)
 
-        # Explicitly set the API key (optional if APIKeyManager already does this)
-        openai.api_key = self.api_key_manager.api_key
-        prompt, size, quality = self.prompt_entry.text(), self.size_dropdown.currentText(), self.quality_dropdown.currentText()
-        try:
-            response = openai.Image.create(model="dall-e-3", prompt=prompt, size=size, quality=quality, n=1)
-            if response.data:
-                self.display_dalle_image(response.data[0].url, self.generated_image_label)
-            else:
-                self.append_response("Failed to generate image or no data returned.")
-        except Exception as e:
-            self.append_response(f"An error occurred: {e}")
+    zip_buffer.seek(0)
+    return zip_buffer.read()
 
-    def display_dalle_image(self, image_url, image_label):
-        try:
-            image_data = urlopen(image_url).read()
-            image = QImage()
-            if image.loadFromData(image_data):
-                pixmap = QPixmap.fromImage(image).scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                image_label.setPixmap(pixmap)
-            else:
-                self.append_response("Failed to load image data.")
-        except Exception as e:
-            self.append_response(f"Failed to display image: {e}")
-
-    def append_response(self, message):
-        self.response_text.append(f"{message}\n\n")
-
-    def chat_with_gpt(self):
-        prompt = self.prompt_entry.text()
-        model = self.model_combo.currentText()  # Get the selected model
-        chat_history = [{"role": "system", "content": "Image analysis: " + self.image_analysis_result}] if self.image_analysis_result else []
-        chat_history.append({"role": "user", "content": prompt})
-
-        headers = {"Authorization": f"Bearer {self.api_key_manager.api_key}"}
-        payload = {"model": model, "messages": chat_history, "max_tokens": 2000}
-
-        try:
-            response = requests.post(CHAT_API_ENDPOINT, headers=headers, json=payload).json()
-            chat_response = response.get('choices', [{}])[0].get('message', {}).get('content', "Failed to get a response.")
-            self.response_text.append(f"{chat_response}\n\n")
-        except Exception as e:
-            self.response_text.append(f"An error occurred: {e}\n\n")
+def generate_comic_book(api_key, user_prompt, progress_placeholder):
+    """Generate a complete comic book based on user prompt"""
+    comic_book = {}
+    
+    # Update progress bar
+    progress_bar = progress_placeholder.progress(0)
+    status_text = st.empty()
+    
+    try:
+        # Step 1: Generate comic book concept
+        status_text.text("Generating comic book concept...")
+        progress_bar.progress(10)
+        comic_concept = generate_content(api_key, f"Create a detailed comic book concept based on the following prompt: {user_prompt}.", "comic book concept creation")
+        comic_book['comic_concept'] = comic_concept
+        
+        # Step 2: Generate detailed plot
+        status_text.text("Generating detailed plot...")
+        progress_bar.progress(20)
+        comic_book['plot'] = generate_content(api_key, f"Create a detailed plot for the comic book: {comic_concept}", "comic book plot development")
+        
+        # Step 3: Generate character designs
+        status_text.text("Generating character designs...")
+        progress_bar.progress(30)
+        character_designs = {}
+        
+        character_prompt = f"Full-body character design for the comic book, based on the following description: {comic_concept}"
+        image_url = generate_image(api_key, character_prompt)
+        if image_url:
+            image_data = download_image(image_url)
+            if image_data:
+                character_designs["character_1.png"] = image_data
+        
+        character_prompt_2 = f"Another full-body character design for the comic book, based on the following description: {comic_concept}"
+        image_url = generate_image(api_key, character_prompt_2)
+        if image_url:
+            image_data = download_image(image_url)
+            if image_data:
+                character_designs["character_2.png"] = image_data
+                
+        comic_book['character_designs'] = character_designs
+        
+        # Step 4: Generate comic panels
+        status_text.text("Generating comic panels...")
+        progress_bar.progress(50)
+        comic_panels = {}
+        
+        panel_prompt_1 = f"Comic panel illustrating a key scene from the comic book, based on the following description: {comic_concept}"
+        image_url = generate_image(api_key, panel_prompt_1)
+        if image_url:
+            image_data = download_image(image_url)
+            if image_data:
+                comic_panels["panel_1.png"] = image_data
+        
+        panel_prompt_2 = f"Comic panel illustrating another key scene from the comic book, based on the following description: {comic_concept}"
+        image_url = generate_image(api_key, panel_prompt_2)
+        if image_url:
+            image_data = download_image(image_url)
+            if image_data:
+                comic_panels["panel_2.png"] = image_data
+                
+        comic_book['comic_panels'] = comic_panels
+        
+        # Step 5: Generate cover page
+        status_text.text("Generating cover page...")
+        progress_bar.progress(70)
+        cover_page = {}
+        
+        cover_prompt = f"Cover page for the comic book, based on the following description: {comic_concept}"
+        image_url = generate_image(api_key, cover_prompt)
+        if image_url:
+            image_data = download_image(image_url)
+            if image_data:
+                cover_page["cover.png"] = image_data
+                
+        comic_book['cover_page'] = cover_page
+        
+        # Step 6: Generate recap
+        status_text.text("Generating recap...")
+        progress_bar.progress(80)
+        comic_book['recap'] = generate_content(api_key, f"Recap the comic book content: {comic_concept}", "comic book recap")
+        
+        # Step 7: Generate master document
+        status_text.text("Generating master document...")
+        progress_bar.progress(90)
+        comic_book['master_document'] = create_master_document(comic_book)
+        
+        # Step 8: Package into ZIP
+        status_text.text("Packaging into ZIP...")
+        progress_bar.progress(95)
+        
+        status_text.text("Comic book generation complete!")
+        progress_bar.progress(100)
+        
+        return comic_book
+        
+    except Exception as e:
+        status_text.text(f"Error: {str(e)}")
+        progress_bar.progress(100)
+        return None
 
 def main():
-    app = QApplication(sys.argv)
-    ex = OpenAIGUI()
-    ex.show()
-    sys.exit(app.exec_())
+    st.set_page_config(
+        page_title="Comic Book Creator",
+        page_icon="📚",
+        layout="wide",
+    )
+    
+    st.title("Comic Book Creator")
+    st.markdown("Generate custom comic books using AI!")
+    
+    # API Key setup
+    api_key = load_api_key()
+    
+    with st.sidebar:
+        st.header("Settings")
+        saved_api_key = st.text_input("OpenAI API Key", value=api_key if api_key else "", type="password")
+        if st.button("Save API Key"):
+            save_api_key(saved_api_key)
+            st.success("API key saved!")
+            api_key = saved_api_key
+    
+    # Main content
+    prompt = st.text_input("Enter your comic book idea:", placeholder="e.g., A superhero who can control time but ages faster when using powers")
+    
+    if st.button("Generate Comic Book"):
+        if not api_key:
+            st.error("Please enter an OpenAI API key in the settings panel.")
+        elif not prompt:
+            st.warning("Please enter a comic book idea.")
+        else:
+            with st.expander("Generation Progress", expanded=True):
+                progress_placeholder = st.empty()
+                comic_book = generate_comic_book(api_key, prompt, progress_placeholder)
+                
+                if comic_book:
+                    # Show preview
+                    st.header("Comic Book Preview")
+                    
+                    st.subheader("Comic Concept")
+                    st.write(comic_book['comic_concept'])
+                    
+                    st.subheader("Plot")
+                    st.write(comic_book['plot'])
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.subheader("Cover Page")
+                        if comic_book['cover_page']:
+                            cover_image = comic_book['cover_page'].get('cover.png')
+                            if cover_image:
+                                st.image(Image.open(BytesIO(cover_image)), width=300)
+                    
+                    with col2:
+                        st.subheader("Characters")
+                        if comic_book['character_designs']:
+                            character_images = list(comic_book['character_designs'].values())
+                            if character_images:
+                                for i, img_data in enumerate(character_images):
+                                    st.image(Image.open(BytesIO(img_data)), width=250, caption=f"Character {i+1}")
+                    
+                    st.subheader("Comic Panels")
+                    if comic_book['comic_panels']:
+                        panel_images = list(comic_book['comic_panels'].values())
+                        cols = st.columns(len(panel_images))
+                        for i, (col, img_data) in enumerate(zip(cols, panel_images)):
+                            with col:
+                                st.image(Image.open(BytesIO(img_data)), width=350, caption=f"Panel {i+1}")
+                    
+                    st.subheader("Recap")
+                    st.write(comic_book['recap'])
+                    
+                    # Download button
+                    zip_data = create_zip(comic_book)
+                    st.download_button(
+                        label="Download Comic Book ZIP",
+                        data=zip_data,
+                        file_name=f"comic_book_{int(time.time())}.zip",
+                        mime="application/zip"
+                    )
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
