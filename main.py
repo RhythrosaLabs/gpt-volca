@@ -1,109 +1,125 @@
 import streamlit as st
 import requests
-import tempfile
+import time
 import os
-from moviepy.editor import concatenate_videoclips, AudioFileClip, VideoFileClip
+import tempfile
+import subprocess
+from moviepy.editor import VideoFileClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
 
-# Set up the Streamlit interface
-st.title("AI-Powered 20s Video Creator")
-st.markdown("Enter your Replicate API key and a topic to generate a 20-second video with script, visuals, music, and voiceover.")
+st.title("AI Video Generator (Replicate)")
 
-api_key = st.text_input("Replicate API Key", type="password")
-topic = st.text_input("Video Topic")
+replicate_api_key = st.text_input("Enter your Replicate API Key", type="password")
+topic = st.text_input("Enter your video topic (e.g. 'deep sea exploration')")
 
-if st.button("Generate Video"):
-    if not api_key or not topic:
-        st.error("Please enter both API Key and a topic.")
-    else:
-        headers = {"Authorization": f"Token {api_key}"}
+if replicate_api_key and topic:
+    headers = {
+        "Authorization": f"Token {replicate_api_key}",
+        "Content-Type": "application/json"
+    }
 
-        # Step 1: Script writing
-        st.info("Generating script...")
-        script_prompt = f"Write a 20 second educational video script for this topic: {topic}. Break it into 4 parts of 5 seconds each."
-        script_response = requests.post(
+    def call_replicate(version, input_payload):
+        # Create the prediction
+        create_resp = requests.post(
             "https://api.replicate.com/v1/predictions",
             headers=headers,
-            json={
-                "version": "anthropic/claude-4-sonnet",
-                "input": {"prompt": script_prompt}
-            }
+            json={"version": version, "input": input_payload}
         )
-        script_text = script_response.json().get("output", "").strip()
-        sections = script_text.split("\n")[:4]  # assume each section is on a new line
+        if create_resp.status_code != 201:
+            st.error(f"Failed to create prediction: {create_resp.text}")
+            st.stop()
 
-        st.success("Script generated:")
-        for idx, sec in enumerate(sections):
-            st.markdown(f"**Part {idx+1}:** {sec}")
+        prediction = create_resp.json()
+        prediction_id = prediction["id"]
 
-        # Step 2: Generate video for each section
-        video_clips = []
-        st.info("Generating video clips...")
-        for idx, sec in enumerate(sections):
-            video_input = f"Create a 5 second cinematic video about: {sec}"
-            vid_resp = requests.post(
-                "https://api.replicate.com/v1/predictions",
-                headers=headers,
-                json={
-                    "version": "luma/ray-flash-2-540p",
-                    "input": {"prompt": video_input}
-                }
+        # Poll until completion
+        while prediction["status"] not in ["succeeded", "failed", "canceled"]:
+            time.sleep(1)
+            poll_resp = requests.get(
+                f"https://api.replicate.com/v1/predictions/{prediction_id}",
+                headers=headers
             )
-            vid_url = vid_resp.json().get("output", "")
-            vid_path = tempfile.mktemp(suffix=".mp4")
-            with open(vid_path, "wb") as f:
-                f.write(requests.get(vid_url).content)
-            video_clips.append(VideoFileClip(vid_path))
+            prediction = poll_resp.json()
 
-        final_video = concatenate_videoclips(video_clips)
-        final_video_path = tempfile.mktemp(suffix="_final.mp4")
-        final_video.write_videofile(final_video_path)
+        if prediction["status"] != "succeeded":
+            st.error(f"Prediction failed: {prediction}")
+            st.stop()
 
-        # Step 3: Voiceover
-        st.info("Generating voiceover...")
-        voice_prompt = " ".join(sections)
-        voice_resp = requests.post(
-            "https://api.replicate.com/v1/predictions",
-            headers=headers,
-            json={
-                "version": "minimax/speech-02-hd",
-                "input": {"text": voice_prompt, "language": "en"}
-            }
+        return prediction["output"]
+
+    st.info("Generating script...")
+    script_prompt = f"Write a 20-second educational video script for the topic: '{topic}'. Break it into 4 parts of 5 seconds each."
+    script_text = call_replicate(
+        "anthropic/claude-4-sonnet",
+        {"prompt": script_prompt}
+    )
+
+    if isinstance(script_text, list):
+        script_text = script_text[0]
+
+    st.success("Script generated:")
+    st.write(script_text)
+
+    sections = [s.strip() for s in script_text.split("\n") if s.strip()][:4]
+    
+    # Generate 4 video clips
+    video_clips = []
+    for i, section in enumerate(sections):
+        st.info(f"Generating video clip {i+1}...")
+        video_url = call_replicate(
+            "luma/ray-flash-2-540p",
+            {"prompt": section, "num_frames": 150, "fps": 30}  # 5 seconds @ 30 fps
         )
-        voice_url = voice_resp.json().get("output", "")
-        voice_path = tempfile.mktemp(suffix=".mp3")
-        with open(voice_path, "wb") as f:
-            f.write(requests.get(voice_url).content)
+        if isinstance(video_url, list):
+            video_url = video_url[0]
 
-        # Step 4: Music
-        st.info("Generating background music...")
-        music_prompt = f"Background music for a {topic} educational video. 20 seconds."
-        music_resp = requests.post(
-            "https://api.replicate.com/v1/predictions",
-            headers=headers,
-            json={
-                "version": "google/lyria-2",
-                "input": {"prompt": music_prompt}
-            }
-        )
-        music_url = music_resp.json().get("output", "")
-        music_path = tempfile.mktemp(suffix=".mp3")
-        with open(music_path, "wb") as f:
-            f.write(requests.get(music_url).content)
+        video_path = os.path.join(tempfile.gettempdir(), f"clip_{i}.mp4")
+        with open(video_path, "wb") as f:
+            f.write(requests.get(video_url).content)
+        video_clips.append(VideoFileClip(video_path))
 
-        # Combine audio and video
-        st.info("Combining everything into final video...")
-        video_clip = VideoFileClip(final_video_path)
-        voice_audio = AudioFileClip(voice_path).volumex(1.0)
-        music_audio = AudioFileClip(music_path).volumex(0.3)
-        final_audio = voice_audio.audio_fadein(1).set_duration(video_clip.duration).fx(lambda clip: clip.set_audio(music_audio))
-        video_clip = video_clip.set_audio(voice_audio.set_duration(video_clip.duration))
+    # Concatenate videos
+    st.info("Combining video clips...")
+    final_video = concatenate_videoclips(video_clips)
+    video_output_path = os.path.join(tempfile.gettempdir(), "final_video.mp4")
+    final_video.write_videofile(video_output_path, codec='libx264')
 
-        output_path = tempfile.mktemp(suffix="_output.mp4")
-        video_clip.write_videofile(output_path)
+    # Generate VoiceOver
+    st.info("Generating voiceover...")
+    full_script = " ".join(sections)
+    voice_url = call_replicate(
+        "minimax/speech-02-hd",
+        {"text": full_script, "voice": "en_us_001"}
+    )
+    if isinstance(voice_url, list):
+        voice_url = voice_url[0]
 
-        st.success("Video creation complete!")
-        st.video(output_path)
+    voice_path = os.path.join(tempfile.gettempdir(), "voice.mp3")
+    with open(voice_path, "wb") as f:
+        f.write(requests.get(voice_url).content)
+    voice_audio = AudioFileClip(voice_path)
 
-        # Cleanup
-        for path in [voice_path, music_path, final_video_path] + [clip.filename for clip in video_clips]:
-            os.remove(path)
+    # Generate music
+    st.info("Generating background music...")
+    music_url = call_replicate(
+        "google/lyria-2",
+        {"prompt": f"background music for {topic}", "duration": 20}
+    )
+    if isinstance(music_url, list):
+        music_url = music_url[0]
+
+    music_path = os.path.join(tempfile.gettempdir(), "music.mp3")
+    with open(music_path, "wb") as f:
+        f.write(requests.get(music_url).content)
+    music_audio = AudioFileClip(music_path).volumex(0.3)  # Lower music volume
+
+    # Combine audio
+    st.info("Combining voice and music...")
+    final_audio = CompositeAudioClip([voice_audio, music_audio.set_start(0)])
+    final_video = final_video.set_audio(final_audio)
+
+    full_output_path = os.path.join(tempfile.gettempdir(), "final_with_audio.mp4")
+    final_video.write_videofile(full_output_path, codec="libx264", audio_codec="aac")
+
+    st.success("Video generation complete!")
+    st.video(full_output_path)
+    st.download_button("Download Video", open(full_output_path, "rb"), file_name="final_video.mp4")
