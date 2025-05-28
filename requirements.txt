@@ -1,6 +1,8 @@
 streamlit>=1.28.0
+replicate>=0.15.0
+moviepy>=1.0.3
 requests>=2.31.0
 Pillow>=10.0.0
-python-dotenv>=1.0.0
-serial
-serial-tools
+numpy>=1.24.0
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.8
