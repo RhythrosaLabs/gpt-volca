@@ -12,9 +12,8 @@ from moviepy.editor import (
 
 st.title("AI Multi-Agent Video Creator")
 
-# Input: Replicate API key and video topic
 replicate_api_key = st.text_input("Enter your Replicate API Key", type="password")
-video_topic = st.text_input("Enter a video topic (e.g., 'Why the earth rotates')")
+video_topic = st.text_input("Enter a video topic (e.g., 'Why the Earth rotates')")
 
 if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     replicate_client = replicate.Client(api_token=replicate_api_key)
@@ -22,28 +21,34 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     def run_replicate(model_path, input_data):
         return replicate_client.run(model_path, input=input_data)
 
-    st.info("Step 1: Writing full script")
+    st.info("Step 1: Writing cohesive script for full video")
     full_script = run_replicate(
         "anthropic/claude-4-sonnet",
         {
             "prompt": (
-                f"Write a precise, vivid, emotionally engaging narration for a 20 second "
-                f"video on the topic: '{video_topic}', broken into four 5-second segments "
-                "clearly marked as 1, 2, 3, 4. Keep timing and pacing in mind."
+                f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a short educational video titled '{video_topic}'. "
+                "The video will be 20 seconds long, so divide your script into 4 segments, each about 5 seconds. "
+                "Make sure the 4 segments tell a cohesive, progressive mini-story or explanation that builds toward a final point. "
+                "Label each section clearly as '1:', '2:', '3:', and '4:'. "
+                "Avoid generic breathing or meditation cues. Stay strictly on-topic."
             )
         },
     )
 
-    # Safely convert output to string
     script_text = "".join(full_script) if isinstance(full_script, list) else full_script
-    script_parts = script_text.split("\n")
-    script_segments = [s.strip() for s in script_parts if s.strip()][:4]
+    script_segments = []
+    for line in script_text.strip().split("\n"):
+        if any(line.strip().startswith(f"{i}:") for i in range(1, 5)):
+            script_segments.append(line.split(":", 1)[1].strip())
+
+    if len(script_segments) < 4:
+        st.error("Failed to extract 4 clear script segments. Please try again or rephrase your topic.")
+        st.stop()
 
     st.success("Script written successfully")
 
     temp_video_paths = []
 
-    # helper to download a URL into a temp file
     def download_to_file(url: str, suffix: str):
         resp = requests.get(url, stream=True)
         resp.raise_for_status()
@@ -53,56 +58,59 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
                 f.write(chunk)
         return tmp.name
 
-    # Generate segment videos
+    # Step 2: Generate segment visuals
     for i, segment in enumerate(script_segments):
-        st.info(f"Step 2.{i+1}: Generating video for segment {i+1}")
-        video_uri = run_replicate(
-            "luma/ray-flash-2-540p",
-            {"prompt": segment, "num_frames": 120, "fps": 24},
-        )
+        st.info(f"Step 2.{i+1}: Generating visuals for segment {i+1}")
+        video_prompt = f"Scene for a video about '{video_topic}'. This part should illustrate: {segment}"
         try:
+            video_uri = run_replicate(
+                "luma/ray-flash-2-540p",
+                {"prompt": video_prompt, "num_frames": 120, "fps": 24},
+            )
             video_path = download_to_file(video_uri, suffix=".mp4")
+            temp_video_paths.append(video_path)
         except Exception as e:
-            st.error(f"Failed to download segment {i+1} video: {e}")
+            st.error(f"Failed to generate or download segment {i+1} video: {e}")
             st.stop()
-        temp_video_paths.append(video_path)
 
-    st.info("Step 3: Concatenating videos")
+    # Step 3: Concatenate videos
+    st.info("Step 3: Concatenating video segments")
     clips = [VideoFileClip(path) for path in temp_video_paths]
-    # ensure same size/fps
     final_video = concatenate_videoclips(clips, method="compose")
     final_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
     final_video.write_videofile(final_video_path, codec="libx264", audio=False)
-    st.success("20-second video created")
+    st.success("Video visuals compiled")
 
-    st.info("Step 4: Generating voiceover")
-    voiceover_uri = run_replicate(
-        "minimax/speech-02-hd",
-        {"text": " ".join(script_segments), "voice": "default"},
-    )
+    # Step 4: Generate voiceover
+    st.info("Step 4: Generating voiceover narration")
+    full_narration = " ".join(script_segments)
     try:
+        voiceover_uri = run_replicate(
+            "minimax/speech-02-hd",
+            {"text": full_narration, "voice": "default"},
+        )
         voice_path = download_to_file(voiceover_uri, suffix=".mp3")
     except Exception as e:
-        st.error(f"Failed to download voiceover: {e}")
+        st.error(f"Failed to generate or download voiceover: {e}")
         st.stop()
 
-    st.info("Step 5: Generating music")
-    music_uri = run_replicate(
-        "google/lyria-2",
-        {"prompt": f"Generate background music suitable for a {video_topic} video lasting 20 seconds."},
-    )
+    # Step 5: Generate background music
+    st.info("Step 5: Creating background music")
     try:
+        music_uri = run_replicate(
+            "google/lyria-2",
+            {"prompt": f"Background music for a cohesive, 20-second educational video about {video_topic}. Light, non-distracting, slightly cinematic tone."},
+        )
         music_path = download_to_file(music_uri, suffix=".mp3")
     except Exception as e:
-        st.error(f"Failed to download music: {e}")
+        st.error(f"Failed to generate or download music: {e}")
         st.stop()
 
-    st.info("Step 6: Merging audio")
-    # reload the silent video
+    # Step 6: Merge audio tracks with video
+    st.info("Step 6: Merging final audio and video")
     video_clip = VideoFileClip(final_video_path)
     duration = video_clip.duration
 
-    # load audio clips and force duration to match video
     voice_clip = AudioFileClip(voice_path).subclip(0, duration).set_duration(duration)
     music_clip = AudioFileClip(music_path).subclip(0, duration).set_duration(duration).volumex(0.3)
 
@@ -118,10 +126,10 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         st.error(f"Error writing final video: {e}")
         st.stop()
 
-    st.success("Final video with music and voiceover ready")
+    st.success("🎬 Final video with narration and music is ready")
     st.video(output_path)
 
-    # Cleanup temp files
+    # Cleanup
     for path in (*temp_video_paths, final_video_path, voice_path, music_path):
         try:
             os.remove(path)
