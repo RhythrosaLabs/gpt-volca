@@ -105,18 +105,11 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         music_uri = run_replicate(
             "meta/musicgen",
             {
-                "top_k": 250,
-                "top_p": 0,
                 "prompt": f"Light, non-distracting, cinematic background music for educational video about {video_topic}. Instrumental, ambient, uplifting tone.",
                 "duration": 20,  # Exact 20 seconds to match video length
-                "temperature": 1,
-                "continuation": False,
-                "model_version": "stereo-large",
+                "model_version": "large",  # Use 'large' or 'melody'
                 "output_format": "mp3",
-                "continuation_start": 0,
-                "multi_band_diffusion": False,
-                "normalization_strategy": "peak",
-                "classifier_free_guidance": 3
+                "normalization_strategy": "peak"
             }
         )
         music_path = download_to_file(music_uri, suffix=".mp3")
