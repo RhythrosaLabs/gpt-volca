@@ -10,6 +10,7 @@ from moviepy.editor import (
     AudioFileClip,
     CompositeAudioClip,
 )
+from moviepy.audio.tools.cuts import AudioInterval
 
 st.title("AI Multi-Agent Video Creator")
 
@@ -28,7 +29,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         {
             "prompt": (
                 f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a 15-word short educational video titled '{video_topic}'. "
-                "The video will be 10 seconds long; divide your script into 4 segments. Limit yourself to 15 words"
+                "The video will be 20 seconds long; divide your script into 4 segments. Limit yourself to 15 words"
                 "Make sure the 4 segments tell a cohesive, progressive mini-story or explanation that builds toward a final point. "
                 "Label each section clearly as '1:', '2:', '3:', and '4:'. "
                 "Avoid generic breathing or meditation cues. Stay strictly on-topic."
@@ -74,7 +75,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             video_path = download_to_file(video_uri, suffix=".mp4")
             temp_video_paths.append(video_path)
 
-            # Ensure 5s per segment
+            # Ensure 5s per segment for a total of 20s
             clip = VideoFileClip(video_path).subclip(0, 5)
             segment_clips.append(clip)
 
@@ -118,12 +119,23 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     try:
         # Concatenate video clips
         final_video = concatenate_videoclips(segment_clips, method="compose")
-        final_duration = final_video.duration  # Should be 20s
+        # Ensure the final video duration is exactly 20 seconds
+        final_video = final_video.set_duration(20)
+        final_duration = final_video.duration
 
-        voice_clip = AudioFileClip(voice_path).subclip(0, final_duration).set_duration(final_duration)
-        music_clip = AudioFileClip(music_path).subclip(0, final_duration).set_duration(final_duration).volumex(0.3)
+        voice_clip = AudioFileClip(voice_path)
+        music_clip = AudioFileClip(music_path).volumex(0.3)
+
+        # Center the voiceover and music within the 20-second video
+        # Calculate padding needed
+        voice_padding = max(0, (final_duration - voice_clip.duration) / 2)
+        music_padding = max(0, (final_duration - music_clip.duration) / 2)
+
+        # Apply padding and ensure audio clips are exactly 20 seconds
+        voice_clip = voice_clip.set_start(voice_padding).set_duration(final_duration)
+        music_clip = music_clip.set_start(music_padding).set_duration(final_duration)
+
         final_audio = CompositeAudioClip([voice_clip, music_clip])
-
         final_video = final_video.set_audio(final_audio)
 
         output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
