@@ -9,6 +9,7 @@ from moviepy.editor import (
     concatenate_videoclips,
     AudioFileClip,
     CompositeAudioClip,
+    ColorClip,
 )
 
 st.title("AI Multi-Agent Ad Creator")
@@ -103,6 +104,39 @@ Label each section as '1:', '2:', '3:', and '4:'."""
                 f.write(chunk)
         return tmp.name
 
+    def safe_audio_resize(audio_clip, target_duration):
+        """Safely resize audio clip to target duration"""
+        try:
+            if audio_clip.duration >= target_duration:
+                # If audio is longer, trim it
+                return audio_clip.subclip(0, target_duration)
+            else:
+                # If audio is shorter, loop it to reach target duration
+                loops_needed = int(target_duration / audio_clip.duration) + 1
+                looped_audio = audio_clip
+                for _ in range(loops_needed - 1):
+                    looped_audio = CompositeAudioClip([looped_audio, audio_clip.set_start(looped_audio.duration)])
+                return looped_audio.subclip(0, target_duration)
+        except Exception as e:
+            st.warning(f"Audio processing warning: {e}")
+            # Return a silent audio clip as fallback
+            return AudioFileClip(None).set_duration(target_duration)
+
+    def safe_video_resize(video_clip, target_duration):
+        """Safely resize video clip to target duration"""
+        try:
+            if video_clip.duration >= target_duration:
+                return video_clip.subclip(0, target_duration)
+            else:
+                # If video is shorter, create a filler clip and concatenate
+                remaining_time = target_duration - video_clip.duration
+                filler = ColorClip(size=video_clip.size, color=(0,0,0), duration=remaining_time)
+                return concatenate_videoclips([video_clip, filler])
+        except Exception as e:
+            st.warning(f"Video processing warning: {e}")
+            # Return the original clip if processing fails
+            return video_clip
+
     segment_clips = []
 
     # Step 2: Generate ad visuals with commercial style
@@ -138,9 +172,11 @@ Label each section as '1:', '2:', '3:', and '4:'."""
             video_path = download_to_file(video_uri, suffix=".mp4")
             temp_video_paths.append(video_path)
 
-            # Ensure 5s per segment
-            clip = VideoFileClip(video_path).subclip(0, 5)
+            # Ensure exactly 5s per segment with safe resizing
+            raw_clip = VideoFileClip(video_path)
+            clip = safe_video_resize(raw_clip, 5.0)
             segment_clips.append(clip)
+            raw_clip.close()  # Free memory
 
             st.video(video_path)
             st.download_button(f"🎥 Download Segment {i+1}", video_path, f"ad_segment_{i+1}.mp4")
@@ -162,6 +198,7 @@ Label each section as '1:', '2:', '3:', and '4:'."""
         "Urgent & Action-Driven": "urgent, compelling"
     }.get(ad_tone, "professional")
     
+    voice_path = None
     try:
         voiceover_uri = run_replicate(
             "minimax/speech-02-hd",
@@ -191,6 +228,7 @@ Label each section as '1:', '2:', '3:', and '4:'."""
     
     music_style = music_styles.get(ad_tone, "commercial, professional")
     
+    music_path = None
     try:
         music_uri = run_replicate(
             "google/lyria-2",
@@ -205,30 +243,78 @@ Label each section as '1:', '2:', '3:', and '4:'."""
         st.error(f"Failed to generate background music: {e}")
         st.stop()
 
-    # Step 6: Create final commercial
+    # Step 6: Create final commercial with robust audio handling
     st.info("Step 6: Assembling final commercial")
     try:
         # Concatenate video clips
         final_video = concatenate_videoclips(segment_clips, method="compose")
         final_duration = final_video.duration  # Should be 20s
+        st.write(f"Final video duration: {final_duration:.2f} seconds")
 
-        # Mix audio with proper commercial levels
-        voice_clip = AudioFileClip(voice_path).subclip(0, final_duration).set_duration(final_duration)
-        music_clip = AudioFileClip(music_path).subclip(0, final_duration).set_duration(final_duration).volumex(0.25)  # Lower music volume for ads
-        final_audio = CompositeAudioClip([voice_clip, music_clip])
+        # Process audio with safe duration handling
+        audio_clips = []
+        
+        if voice_path and os.path.exists(voice_path):
+            try:
+                voice_raw = AudioFileClip(voice_path)
+                st.write(f"Original voice duration: {voice_raw.duration:.2f} seconds")
+                voice_clip = safe_audio_resize(voice_raw, final_duration)
+                audio_clips.append(voice_clip)
+                voice_raw.close()  # Free memory
+            except Exception as e:
+                st.warning(f"Voice audio processing failed: {e}")
+        
+        if music_path and os.path.exists(music_path):
+            try:
+                music_raw = AudioFileClip(music_path)
+                st.write(f"Original music duration: {music_raw.duration:.2f} seconds")
+                music_clip = safe_audio_resize(music_raw, final_duration)
+                music_clip = music_clip.volumex(0.25)  # Lower music volume for ads
+                audio_clips.append(music_clip)
+                music_raw.close()  # Free memory
+            except Exception as e:
+                st.warning(f"Music audio processing failed: {e}")
 
-        final_video = final_video.set_audio(final_audio)
+        # Combine audio tracks
+        if audio_clips:
+            try:
+                final_audio = CompositeAudioClip(audio_clips)
+                final_video = final_video.set_audio(final_audio)
+            except Exception as e:
+                st.warning(f"Audio composition failed: {e}. Proceeding with video only.")
 
         output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        final_video.write_videofile(
-            output_path,
-            codec="libx264",
-            audio_codec="aac",
-            temp_audiofile="temp-audio.m4a",
-            remove_temp=True,
-            fps=24,
-            bitrate="5000k"  # Higher quality for commercial use
-        )
+        
+        # Write video with error handling
+        try:
+            final_video.write_videofile(
+                output_path,
+                codec="libx264",
+                audio_codec="aac" if final_video.audio is not None else None,
+                temp_audiofile="temp-audio.m4a",
+                remove_temp=True,
+                fps=24,
+                bitrate="5000k",  # Higher quality for commercial use
+                verbose=False,
+                logger=None  # Suppress moviepy logs
+            )
+        except Exception as e:
+            st.error(f"Video writing failed: {e}")
+            # Try writing without audio as fallback
+            try:
+                final_video_no_audio = final_video.without_audio()
+                final_video_no_audio.write_videofile(
+                    output_path,
+                    codec="libx264",
+                    fps=24,
+                    bitrate="5000k",
+                    verbose=False,
+                    logger=None
+                )
+                st.warning("Created video without audio due to audio processing issues.")
+            except Exception as e2:
+                st.error(f"Fallback video creation also failed: {e2}")
+                st.stop()
 
         st.success("🎬 Your 20-second commercial is ready!")
         st.video(output_path)
@@ -242,14 +328,33 @@ Label each section as '1:', '2:', '3:', and '4:'."""
         
         st.download_button("📽 Download Final Commercial", output_path, f"{product_name.replace(' ', '_')}_ad.mp4")
 
+        # Close video clips to free memory
+        final_video.close()
+        for clip in segment_clips:
+            clip.close()
+
     except Exception as e:
         st.warning("Final commercial assembly failed, but you can still download individual components.")
         st.error(f"Error creating final video: {e}")
+        
+        # Close clips even if assembly failed
+        try:
+            for clip in segment_clips:
+                clip.close()
+        except:
+            pass
 
     # Cleanup temporary files
-    for path in (*temp_video_paths, voice_path, music_path, script_file_path):
+    cleanup_paths = [*temp_video_paths, script_file_path]
+    if voice_path:
+        cleanup_paths.append(voice_path)
+    if music_path:
+        cleanup_paths.append(music_path)
+        
+    for path in cleanup_paths:
         try:
-            os.remove(path)
+            if os.path.exists(path):
+                os.remove(path)
         except OSError:
             pass
 
@@ -270,4 +375,9 @@ with st.expander("💡 Tips for Better Ads"):
     - Match voice tone to your brand personality
     - Keep music volume low enough that narration is clear
     - End with a memorable audio signature if possible
+    
+    **Troubleshooting:**
+    - If audio issues occur, the app will automatically create video-only versions
+    - Generated audio may be shorter than expected - the app will loop it safely
+    - All individual components are available for download even if final assembly fails
     """)
