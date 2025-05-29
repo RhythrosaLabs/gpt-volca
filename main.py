@@ -2,6 +2,7 @@ import streamlit as st
 import replicate
 import tempfile
 import os
+import re
 import requests
 from moviepy.editor import (
     VideoFileClip,
@@ -35,11 +36,10 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         },
     )
 
+    # --- Robust script parsing using regex ---
     script_text = "".join(full_script) if isinstance(full_script, list) else full_script
-    script_segments = []
-    for line in script_text.strip().split("\n"):
-        if any(line.strip().startswith(f"{i}:") for i in range(1, 5)):
-            script_segments.append(line.split(":", 1)[1].strip())
+    matches = re.findall(r"\b[1-4]:\s*(.+?)(?=\n[1-4]:|\Z)", script_text, re.DOTALL)
+    script_segments = [m.strip().replace('\n', ' ') for m in matches]
 
     if len(script_segments) < 4:
         st.error("Failed to extract 4 clear script segments. Please try again or rephrase your topic.")
@@ -84,7 +84,6 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
                 st.warning(f"Clip {i+1} has no duration. Assigning fallback duration.")
                 clip = clip.set_duration(fallback_duration)
 
-            # Ensure silent clips don't crash audio logic
             if clip.audio is None:
                 clip = clip.set_audio(None)
 
