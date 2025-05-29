@@ -248,30 +248,46 @@ Label each section as '1:', '2:', '3:', and '4:'."""
         
         st.write(f"Debug info - Video: {video_duration:.2f}s, Voice: {voice_duration:.2f}s, Music: {music_duration:.2f}s")
         
-        # Step 6c: Sync audio durations
+        # Step 6c: Sync audio durations with proper padding
         status_text.text("Synchronizing audio durations...")
         progress_bar.progress(40)
         
+        from moviepy.audio.AudioClip import AudioArrayClip
+        import numpy as np
+        
+        # Handle voice clip duration
         if voice_duration > video_duration:
             voice_clip = voice_clip.subclip(0, video_duration)
         elif voice_duration < video_duration:
-            voice_clip = voice_clip.set_duration(video_duration)
+            # Create silence to pad the voice clip
+            silence_duration = video_duration - voice_duration
+            silence_array = np.zeros((int(silence_duration * 22050), 2))  # 22050 Hz stereo silence
+            silence_clip = AudioArrayClip(silence_array, fps=22050)
             
+            # Concatenate voice with silence
+            from moviepy.audio.io.AudioFileClip import concatenate_audioclips
+            voice_clip = concatenate_audioclips([voice_clip, silence_clip])
+            
+        # Handle music clip duration  
         if music_duration > video_duration:
             music_clip = music_clip.subclip(0, video_duration)
         elif music_duration < video_duration:
+            # Loop music to fill duration
             loops_needed = int(video_duration / music_duration) + 1
-            music_clip = concatenate_audioclips([music_clip] * loops_needed).subclip(0, video_duration)
+            music_clip = concatenate_audioclips([music_clip] * loops_needed)
+            music_clip = music_clip.subclip(0, video_duration)
         
-        # Step 6d: Create composite audio
+        # Step 6d: Create composite audio with explicit duration control
         status_text.text("Mixing audio tracks...")
         progress_bar.progress(50)
         
-        voice_clip = voice_clip.set_duration(video_duration)
-        music_clip = music_clip.set_duration(video_duration).volumex(0.25)
+        # Ensure exact durations before mixing
+        voice_clip = voice_clip.subclip(0, video_duration)
+        music_clip = music_clip.subclip(0, video_duration).volumex(0.25)
         
         final_audio = CompositeAudioClip([voice_clip, music_clip])
-        final_audio = final_audio.set_duration(video_duration)
+        # Force exact duration with subclip instead of set_duration
+        final_audio = final_audio.subclip(0, video_duration)
         
         # Step 6e: Combine video and audio
         status_text.text("Combining video and audio...")
@@ -326,19 +342,21 @@ Label each section as '1:', '2:', '3:', and '4:'."""
             except Exception as encoding_error2:
                 st.warning(f"Simplified encoding failed: {str(encoding_error2)[:100]}...")
         
-        # Third try: Export without audio mixing (fallback)
+        # Third try: Create audio file separately first (most robust)
         if not encoding_success:
-            status_text.text("Encoding final video (attempt 3/3 - fallback)...")
+            status_text.text("Encoding final video (attempt 3/3 - audio-first method)...")
             progress_bar.progress(90)
             
             try:
-                # Create a simpler version - video only, then add audio separately
-                output_path3 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+                # Step 1: Create the final audio file separately
+                temp_audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+                final_audio.write_audiofile(temp_audio_path, verbose=False, logger=None)
                 
-                # Export video without audio first
+                # Step 2: Create video without audio
                 video_only = final_video.without_audio()
+                temp_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
                 video_only.write_videofile(
-                    output_path3,
+                    temp_video_path,
                     codec="libx264",
                     fps=24,
                     verbose=False,
@@ -346,30 +364,38 @@ Label each section as '1:', '2:', '3:', and '4:'."""
                     preset='ultrafast'
                 )
                 
-                # Then add audio in a separate step
-                from moviepy.editor import VideoFileClip
-                temp_video = VideoFileClip(output_path3)
-                final_with_audio = temp_video.set_audio(final_audio)
+                # Step 3: Load the audio file and combine
+                final_audio_loaded = AudioFileClip(temp_audio_path)
+                temp_video_loaded = VideoFileClip(temp_video_path)
                 
-                output_path4 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-                final_with_audio.write_videofile(
-                    output_path4,
+                # Ensure durations match exactly
+                final_audio_loaded = final_audio_loaded.subclip(0, temp_video_loaded.duration)
+                
+                final_combined = temp_video_loaded.set_audio(final_audio_loaded)
+                
+                output_path3 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+                final_combined.write_videofile(
+                    output_path3,
                     codec="libx264",
                     audio_codec="aac",
                     verbose=False,
-                    logger=None
+                    logger=None,
+                    preset='ultrafast'
                 )
                 
-                output_path = output_path4
+                output_path = output_path3
                 encoding_success = True
                 
                 # Cleanup temp files
-                temp_video.close()
-                final_with_audio.close()
-                os.remove(output_path3)
+                video_only.close()
+                temp_video_loaded.close()
+                final_audio_loaded.close()
+                final_combined.close()
+                os.remove(temp_audio_path)
+                os.remove(temp_video_path)
                 
             except Exception as encoding_error3:
-                st.error(f"All encoding attempts failed. Last error: {str(encoding_error3)[:200]}...")
+                st.error(f"Audio-first encoding failed: {str(encoding_error3)[:200]}...")
                 encoding_success = False
 
         progress_bar.progress(100)
