@@ -16,6 +16,43 @@ st.title("AI Multi-Agent Video Creator")
 replicate_api_key = st.text_input("Enter your Replicate API Key", type="password")
 video_topic = st.text_input("Enter a video topic (e.g., 'Why the Earth rotates')")
 
+# Voice selection dropdown
+voice_options = {
+    "Wise Woman": "Wise_Woman",
+    "Friendly Person": "Friendly_Person", 
+    "Inspirational Girl": "Inspirational_girl",
+    "Deep Voice Man": "Deep_Voice_Man",
+    "Calm Woman": "Calm_Woman",
+    "Casual Guy": "Casual_Guy",
+    "Lively Girl": "Lively_Girl",
+    "Patient Man": "Patient_Man",
+    "Young Knight": "Young_Knight",
+    "Determined Man": "Determined_Man",
+    "Lovely Girl": "Lovely_Girl",
+    "Decent Boy": "Decent_Boy",
+    "Imposing Manner": "Imposing_Manner",
+    "Elegant Man": "Elegant_Man",
+    "Abbess": "Abbess",
+    "Sweet Girl 2": "Sweet_Girl_2",
+    "Exuberant Girl": "Exuberant_Girl"
+}
+
+selected_voice = st.selectbox(
+    "Choose a voice for your voiceover:",
+    options=list(voice_options.keys()),
+    index=0,  # Default to "Wise Woman"
+    help="Select the voice that will narrate your video"
+)
+
+# Optional: Add emotion selection
+emotion_options = ["auto", "happy", "sad", "angry", "surprised", "fearful", "disgusted"]
+selected_emotion = st.selectbox(
+    "Choose voice emotion (optional):",
+    options=emotion_options,
+    index=0,  # Default to "auto"
+    help="Select the emotional tone for the voiceover"
+)
+
 if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     replicate_client = replicate.Client(api_token=replicate_api_key)
 
@@ -84,13 +121,25 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             st.error(f"Failed to generate or download segment {i+1} video: {e}")
             st.stop()
 
-    # Step 4: Generate voiceover
-    st.info("Step 4: Generating voiceover narration")
+    # Step 4: Generate voiceover with selected voice
+    st.info(f"Step 4: Generating voiceover narration with {selected_voice} voice")
     full_narration = " ".join(script_segments)
     try:
         voiceover_uri = run_replicate(
             "minimax/speech-02-hd",
-            {"text": full_narration, "voice": "default"},
+            {
+                "text": full_narration, 
+                "voice_id": voice_options[selected_voice],
+                "emotion": selected_emotion,
+                "speed": 1,
+                "pitch": 0,
+                "volume": 1,
+                "bitrate": 128000,
+                "channel": "mono",
+                "sample_rate": 32000,
+                "language_boost": "English",
+                "english_normalization": True
+            },
         )
         voice_path = download_to_file(voiceover_uri, suffix=".mp3")
         st.audio(voice_path)
