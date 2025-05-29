@@ -3,6 +3,7 @@ import replicate
 import tempfile
 import os
 import requests
+import re
 from moviepy.editor import (
     VideoFileClip,
     concatenate_videoclips,
@@ -36,13 +37,12 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     )
 
     script_text = "".join(full_script) if isinstance(full_script, list) else full_script
-    script_segments = []
-    for line in script_text.strip().split("\n"):
-        if any(line.strip().startswith(f"{i}:") for i in range(1, 5)):
-            script_segments.append(line.split(":", 1)[1].strip())
+
+    # Improved script extraction logic using regex
+    script_segments = re.findall(r"\d+:\s*(.+)", script_text)
 
     if len(script_segments) < 4:
-        st.error("Failed to extract 4 clear script segments. Please try again or rephrase your topic.")
+        st.error("Failed to extract 4 clear script segments. Try adjusting your topic or refining the prompt.")
         st.stop()
 
     st.success("Script written successfully")
