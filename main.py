@@ -20,7 +20,7 @@ video_topic = st.text_input("Enter a video topic (e.g., 'Why the Earth rotates')
 # Voice selection dropdown
 voice_options = {
     "Wise Woman": "Wise_Woman",
-    "Friendly Person": "Friendly_Person", 
+    "Friendly Person": "Friendly_Person",
     "Inspirational Girl": "Inspirational_girl",
     "Deep Voice Man": "Deep_Voice_Man",
     "Calm Woman": "Calm_Woman",
@@ -51,8 +51,9 @@ with col1:
         ["Documentary", "Cinematic", "Educational", "Modern", "Nature", "Scientific"],
         help="Choose the visual style for your video"
     )
-    
-    aspect_ratio = st.selectbox(
+
+    # Renamed to aspect_ratio_str to avoid conflict with calculated aspect ratio
+    aspect_ratio_str = st.selectbox(
         "Video Dimensions:",
         ["16:9", "9:16", "1:1", "4:3"],
         help="Choose aspect ratio for your video"
@@ -64,7 +65,7 @@ with col2:
         [("Standard (120 frames)", 120), ("High (200 frames)", 200)],
         format_func=lambda x: x[0]
     )[1]
-    
+
     enable_loop = st.checkbox(
         "Loop video segments",
         value=False,
@@ -78,7 +79,7 @@ with col3:
         index=0,
         help="Select the voice that will narrate your video"
     )
-    
+
     selected_emotion = st.selectbox(
         "Voice emotion:",
         options=emotion_options,
@@ -89,8 +90,8 @@ with col3:
 # Camera movement options
 st.subheader("Camera Movement (Optional)")
 camera_concepts = [
-    "static", "zoom_in", "zoom_out", "pan_left", "pan_right", 
-    "tilt_up", "tilt_down", "orbit_left", "orbit_right", 
+    "static", "zoom_in", "zoom_out", "pan_left", "pan_right",
+    "tilt_up", "tilt_down", "orbit_left", "orbit_right",
     "push_in", "pull_out", "crane_up", "crane_down",
     "aerial", "aerial_drone", "handheld", "dolly_zoom"
 ]
@@ -110,7 +111,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
 
     st.info("Step 1: Writing cohesive script for full video")
     full_script = run_replicate(
-        "anthropic/claude-4-sonnet",
+        "anthropic/claude-3-haiku", # Changed to haiku for faster response and cost-effectiveness
         {
             "prompt": (
                 f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a 20-second educational video titled '{video_topic}'. "
@@ -149,7 +150,16 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
                 f.write(chunk)
         return tmp.name
 
-    segment_clips = []
+    # Determine target resolution based on aspect ratio for resizing/cropping
+    target_width, target_height = 0, 0
+    if aspect_ratio_str == "16:9":
+        target_width, target_height = 1280, 720  # HD widescreen
+    elif aspect_ratio_str == "9:16":
+        target_width, target_height = 720, 1280  # Vertical video for mobile
+    elif aspect_ratio_str == "1:1":
+        target_width, target_height = 720, 720  # Square video
+    elif aspect_ratio_str == "4:3":
+        target_width, target_height = 960, 720  # Standard definition
 
     # Step 2: Generate segment visuals
     for i, segment in enumerate(script_segments):
@@ -163,14 +173,14 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             shot_type = "close-up shot showing important details"
         else:
             shot_type = "dynamic concluding shot"
-            
+
         video_prompt = f"Cinematic {shot_type} for educational video about '{video_topic}'. Visual content: {segment}. Style: {video_style.lower()}, clean, professional, well-lit. Camera movement: smooth, purposeful. No text overlays."
         try:
             video_uri = run_replicate(
                 "luma/ray-flash-2-540p",
                 {
-                    "prompt": video_prompt, 
-                    "num_frames": num_frames, 
+                    "prompt": video_prompt,
+                    "num_frames": num_frames,
                     "fps": 24,
                     "guidance": 3.0,  # Higher guidance for better prompt adherence
                     "num_inference_steps": 30  # More steps for better quality
@@ -181,9 +191,29 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
 
             # Ensure 5s per segment for a total of 20s
             clip = VideoFileClip(video_path).subclip(0, 5)
+
+            # --- Aspect Ratio Adjustment Logic ---
+            current_aspect_ratio = clip.w / clip.h
+            target_aspect_ratio = target_width / target_height
+
+            if current_aspect_ratio > target_aspect_ratio:
+                # Video is wider than target, crop horizontally
+                new_width = int(clip.h * target_aspect_ratio)
+                x_center = clip.w / 2
+                clip = clip.crop(x_center - new_width / 2, 0, x_center + new_width / 2, clip.h)
+            elif current_aspect_ratio < target_aspect_ratio:
+                # Video is taller than target, crop vertically
+                new_height = int(clip.w / target_aspect_ratio)
+                y_center = clip.h / 2
+                clip = clip.crop(0, y_center - new_height / 2, clip.w, y_center + new_height / 2)
+
+            # Resize to the specified target dimensions
+            clip = clip.resize((target_width, target_height))
+            # --- End Aspect Ratio Adjustment ---
+
             segment_clips.append(clip)
 
-            st.video(video_path)
+            st.video(video_path) # Still show the original downloaded video for immediate feedback
             st.download_button(f"🎥 Download Segment {i+1}", video_path, f"segment_{i+1}.mp4")
         except Exception as e:
             st.error(f"Failed to generate or download segment {i+1} video: {e}")
@@ -192,11 +222,19 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     # Step 4: Generate voiceover with selected voice
     st.info(f"Step 4: Generating voiceover narration with {selected_voice} voice")
     full_narration = " ".join(script_segments)
+
+    # --- Punctuation Removal for Voiceover ---
+    # Removes all characters that are not word characters (letters, numbers, underscore) or whitespace.
+    # This prevents the voiceover from reading out punctuation like "asterisk asterisk".
+    # You can modify the regex to keep certain punctuation if desired (e.g., r'[^\w\s.,?!]' to keep periods, commas, etc.)
+    clean_narration = re.sub(r'[^\w\s]', '', full_narration)
+    # --- End Punctuation Removal ---
+
     try:
         voiceover_uri = run_replicate(
             "minimax/speech-02-hd",
             {
-                "text": full_narration, 
+                "text": clean_narration, # Use the cleaned narration here
                 "voice_id": voice_options[selected_voice],
                 "emotion": selected_emotion,
                 "speed": 1,
@@ -242,25 +280,25 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         # Improve audio mixing
         voice_clip = AudioFileClip(voice_path)
         music_clip = AudioFileClip(music_path)
-        
+
         # Better volume balancing
         voice_volume = 1.0
         music_volume = 0.2  # Lower music volume for better voice clarity
-        
+
         # Fade in/out for music
         music_clip = music_clip.volumex(music_volume).audio_fadein(1).audio_fadeout(1)
         voice_clip = voice_clip.volumex(voice_volume)
-        
+
         # Ensure proper duration
         target_duration = final_video.duration
-        
+
         if voice_clip.duration > target_duration:
             voice_clip = voice_clip.subclip(0, target_duration)
         elif voice_clip.duration < target_duration:
             # Center the voice in the timeline
             voice_start = (target_duration - voice_clip.duration) / 2
             voice_clip = voice_clip.set_start(voice_start)
-            
+
         if music_clip.duration > target_duration:
             music_clip = music_clip.subclip(0, target_duration)
         elif music_clip.duration < target_duration:
