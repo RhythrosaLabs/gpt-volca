@@ -254,16 +254,23 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         music_clip = music_clip.volumex(music_volume).audio_fadein(1).audio_fadeout(1)
         voice_clip = voice_clip.volumex(voice_volume)
 
-        # Ensure proper duration
+        # FIXED AUDIO TIMING: Start voice early and extend video if needed
+        voice_start_time = 1.5  # Start voice at 1.5 seconds instead of centering
+        
+        # Calculate required video duration to accommodate full voice
+        required_duration = max(20, voice_start_time + voice_clip.duration + 0.5)  # Add 0.5s buffer at end
+        
+        # Extend video duration if needed to prevent voice cutoff
+        if required_duration > final_video.duration:
+            final_video = final_video.set_duration(required_duration)
+            st.info(f"Extended video to {required_duration:.1f}s to accommodate full narration")
+        
+        # Set voice to start at specified time (no centering or truncation)
+        voice_clip = voice_clip.set_start(voice_start_time)
+        
+        # Adjust music to match final video duration
         target_duration = final_video.duration
-
-        if voice_clip.duration > target_duration:
-            voice_clip = voice_clip.subclip(0, target_duration)
-        elif voice_clip.duration < target_duration:
-            # Center the voice in the timeline
-            voice_start = (target_duration - voice_clip.duration) / 2
-            voice_clip = voice_clip.set_start(voice_start)
-
+        
         if music_clip.duration > target_duration:
             music_clip = music_clip.subclip(0, target_duration)
         elif music_clip.duration < target_duration:
