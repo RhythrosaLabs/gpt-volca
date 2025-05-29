@@ -9,6 +9,7 @@ from moviepy.editor import (
     concatenate_videoclips,
     AudioFileClip,
     CompositeAudioClip,
+    concatenate_audioclips,
 )
 
 st.title("AI Multi-Agent Video Creator")
@@ -36,6 +37,9 @@ voice_options = {
     "Sweet Girl 2": "Sweet_Girl_2",
     "Exuberant Girl": "Exuberant_Girl"
 }
+
+# Define emotion options
+emotion_options = ["auto", "happy", "sad", "angry", "surprised", "fearful", "disgusted"]
 
 # Video quality settings
 st.subheader("Video Settings")
@@ -130,7 +134,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         else:
             shot_type = "dynamic concluding shot"
             
-        video_prompt = f"Cinematic {shot_type} for educational video about '{video_topic}'. Visual content: {segment}. Style: clean, professional, well-lit, documentary quality. Camera movement: smooth, purposeful. No text overlays."
+        video_prompt = f"Cinematic {shot_type} for educational video about '{video_topic}'. Visual content: {segment}. Style: {video_style.lower()}, clean, professional, well-lit. Camera movement: smooth, purposeful. No text overlays."
         try:
             video_uri = run_replicate(
                 "luma/ray-flash-2-540p",
@@ -205,17 +209,35 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         final_video = final_video.set_duration(20)
         final_duration = final_video.duration
 
+        # Improve audio mixing
         voice_clip = AudioFileClip(voice_path)
-        music_clip = AudioFileClip(music_path).volumex(0.3)
-
-        # Center the voiceover and music within the 20-second video
-        # Calculate padding needed
-        voice_padding = max(0, (final_duration - voice_clip.duration) / 2)
-        music_padding = max(0, (final_duration - music_clip.duration) / 2)
-
-        # Apply padding and ensure audio clips are exactly 20 seconds
-        voice_clip = voice_clip.set_start(voice_padding).set_duration(final_duration)
-        music_clip = music_clip.set_start(music_padding).set_duration(final_duration)
+        music_clip = AudioFileClip(music_path)
+        
+        # Better volume balancing
+        voice_volume = 1.0
+        music_volume = 0.2  # Lower music volume for better voice clarity
+        
+        # Fade in/out for music
+        music_clip = music_clip.volumex(music_volume).audio_fadein(1).audio_fadeout(1)
+        voice_clip = voice_clip.volumex(voice_volume)
+        
+        # Ensure proper duration
+        target_duration = final_video.duration
+        
+        if voice_clip.duration > target_duration:
+            voice_clip = voice_clip.subclip(0, target_duration)
+        elif voice_clip.duration < target_duration:
+            # Center the voice in the timeline
+            voice_start = (target_duration - voice_clip.duration) / 2
+            voice_clip = voice_clip.set_start(voice_start)
+            
+        if music_clip.duration > target_duration:
+            music_clip = music_clip.subclip(0, target_duration)
+        elif music_clip.duration < target_duration:
+            # Loop music if needed
+            loops_needed = int(target_duration / music_clip.duration) + 1
+            music_clips = [music_clip] * loops_needed
+            music_clip = concatenate_audioclips(music_clips).subclip(0, target_duration)
 
         final_audio = CompositeAudioClip([voice_clip, music_clip])
         final_video = final_video.set_audio(final_audio)
