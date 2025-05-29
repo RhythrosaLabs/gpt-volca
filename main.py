@@ -20,7 +20,7 @@ video_topic = st.text_input("Enter a video topic (e.g., 'Why the Earth rotates')
 # Voice selection dropdown
 voice_options = {
     "Wise Woman": "Wise_Woman",
-    "Friendly Person": "Friendly_Person", 
+    "Friendly Person": "Friendly_Person",
     "Inspirational Girl": "Inspirational_girl",
     "Deep Voice Man": "Deep_Voice_Man",
     "Calm Woman": "Calm_Woman",
@@ -51,7 +51,7 @@ with col1:
         ["Documentary", "Cinematic", "Educational", "Modern", "Nature", "Scientific"],
         help="Choose the visual style for your video"
     )
-    
+
     aspect_ratio = st.selectbox(
         "Video Dimensions:",
         ["16:9", "9:16", "1:1", "4:3"],
@@ -64,7 +64,7 @@ with col2:
         [("Standard (120 frames)", 120), ("High (200 frames)", 200)],
         format_func=lambda x: x[0]
     )[1]
-    
+
     enable_loop = st.checkbox(
         "Loop video segments",
         value=False,
@@ -78,7 +78,7 @@ with col3:
         index=0,
         help="Select the voice that will narrate your video"
     )
-    
+
     selected_emotion = st.selectbox(
         "Voice emotion:",
         options=emotion_options,
@@ -89,8 +89,8 @@ with col3:
 # Camera movement options
 st.subheader("Camera Movement (Optional)")
 camera_concepts = [
-    "static", "zoom_in", "zoom_out", "pan_left", "pan_right", 
-    "tilt_up", "tilt_down", "orbit_left", "orbit_right", 
+    "static", "zoom_in", "zoom_out", "pan_left", "pan_right",
+    "tilt_up", "tilt_down", "orbit_left", "orbit_right",
     "push_in", "pull_out", "crane_up", "crane_down",
     "aerial", "aerial_drone", "handheld", "dolly_zoom"
 ]
@@ -163,14 +163,14 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             shot_type = "close-up shot showing important details"
         else:
             shot_type = "dynamic concluding shot"
-            
+
         video_prompt = f"Cinematic {shot_type} for educational video about '{video_topic}'. Visual content: {segment}. Style: {video_style.lower()}, clean, professional, well-lit. Camera movement: smooth, purposeful. No text overlays."
         try:
             video_uri = run_replicate(
                 "luma/ray-flash-2-540p",
                 {
-                    "prompt": video_prompt, 
-                    "num_frames": num_frames, 
+                    "prompt": video_prompt,
+                    "num_frames": num_frames,
                     "fps": 24,
                     "guidance": 3.0,  # Higher guidance for better prompt adherence
                     "num_inference_steps": 30  # More steps for better quality
@@ -192,11 +192,14 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     # Step 4: Generate voiceover with selected voice
     st.info(f"Step 4: Generating voiceover narration with {selected_voice} voice")
     full_narration = " ".join(script_segments)
+    # Remove punctuation and special characters from the narration for VoiceOver
+    # This regex keeps only alphanumeric characters and spaces.
+    cleaned_narration = re.sub(r'[^\w\s]', '', full_narration)
     try:
         voiceover_uri = run_replicate(
             "minimax/speech-02-hd",
             {
-                "text": full_narration, 
+                "text": cleaned_narration, # Use the cleaned narration here
                 "voice_id": voice_options[selected_voice],
                 "emotion": selected_emotion,
                 "speed": 1,
@@ -242,25 +245,25 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         # Improve audio mixing
         voice_clip = AudioFileClip(voice_path)
         music_clip = AudioFileClip(music_path)
-        
+
         # Better volume balancing
         voice_volume = 1.0
         music_volume = 0.2  # Lower music volume for better voice clarity
-        
+
         # Fade in/out for music
         music_clip = music_clip.volumex(music_volume).audio_fadein(1).audio_fadeout(1)
         voice_clip = voice_clip.volumex(voice_volume)
-        
+
         # Ensure proper duration
         target_duration = final_video.duration
-        
+
         if voice_clip.duration > target_duration:
             voice_clip = voice_clip.subclip(0, target_duration)
         elif voice_clip.duration < target_duration:
             # Center the voice in the timeline
             voice_start = (target_duration - voice_clip.duration) / 2
             voice_clip = voice_clip.set_start(voice_start)
-            
+
         if music_clip.duration > target_duration:
             music_clip = music_clip.subclip(0, target_duration)
         elif music_clip.duration < target_duration:
