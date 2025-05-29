@@ -115,11 +115,12 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             "prompt": (
                 f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a 20-second educational video titled '{video_topic}'. "
                 "The video will be 20 seconds long; divide your script into 4 segments of approximately 5 seconds each. "
-                "Each segment should be 6-10 words (about 1.3-1.8 seconds of speech per segment, allowing for pacing). "
+                "Each segment should be ONLY 3-5 words (about 0.8-1.2 seconds of speech per segment, allowing for pacing). "
+                "Keep it very concise - total script should be maximum 16-20 words across all 4 segments. "
                 "Make sure the 4 segments tell a cohesive, progressive story that builds toward a compelling conclusion. "
-                "Use vivid, concrete language that translates well to visuals. Include specific details, numbers, or comparisons when relevant. "
+                "Use punchy, impactful language that translates well to visuals. "
                 "Label each section clearly as '1:', '2:', '3:', and '4:'. "
-                "Write in an engaging, conversational tone that keeps viewers hooked. Avoid generic statements."
+                "Write in an engaging, conversational tone that keeps viewers hooked. Be extremely concise."
             )
         },
     )
@@ -202,7 +203,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
                 "text": cleaned_narration, # Use the cleaned narration here
                 "voice_id": voice_options[selected_voice],
                 "emotion": selected_emotion,
-                "speed": 1.2,
+                "speed": 1.1,
                 "pitch": 0,
                 "volume": 1,
                 "bitrate": 128000,
@@ -250,20 +251,17 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         voice_volume = 1.0
         music_volume = 0.3  # Lower music volume for better voice clarity
 
-        # Fade in/out for music
-        music_clip = music_clip.volumex(music_volume).audio_fadein(1).audio_fadeout(1)
+        # Fade in/out for music - 3 second fade out at the end
+        music_clip = music_clip.volumex(music_volume).audio_fadein(1).audio_fadeout(3)
         voice_clip = voice_clip.volumex(voice_volume)
 
-        # FIXED AUDIO TIMING: Start voice early and extend video if needed
-        voice_start_time = 1.5  # Start voice at 1.5 seconds instead of centering
+        # FIXED AUDIO TIMING: Start voice early and keep video at 20s max
+        voice_start_time = 1.5  # Start voice at 1.5 seconds
         
-        # Calculate required video duration to accommodate full voice
-        required_duration = max(20, voice_start_time + voice_clip.duration + 0.5)  # Add 0.5s buffer at end
-        
-        # Extend video duration if needed to prevent voice cutoff
-        if required_duration > final_video.duration:
-            final_video = final_video.set_duration(required_duration)
-            st.info(f"Extended video to {required_duration:.1f}s to accommodate full narration")
+        # Keep video at 20 seconds but ensure voice has enough time
+        # If voice is too long, it will extend slightly past video end but won't be cut
+        target_duration = 20  # Keep video at 20 seconds
+        final_video = final_video.set_duration(target_duration)
         
         # Set voice to start at specified time (no centering or truncation)
         voice_clip = voice_clip.set_start(voice_start_time)
@@ -278,6 +276,9 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             loops_needed = int(target_duration / music_clip.duration) + 1
             music_clips = [music_clip] * loops_needed
             music_clip = concatenate_audioclips(music_clips).subclip(0, target_duration)
+        
+        # Apply the 3-second fade out to the final music clip
+        music_clip = music_clip.audio_fadeout(3)
 
         final_audio = CompositeAudioClip([voice_clip, music_clip])
         final_video = final_video.set_audio(final_audio)
