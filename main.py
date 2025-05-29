@@ -27,7 +27,9 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         "anthropic/claude-4-sonnet",
         {
             "prompt": (
-                f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a 20 word super-short educational video titled '{video_topic}'. "
+                f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a 25 word short educational video titled '{video_topic}'. "
+                "The video will be 10 seconds long; divide your script into 4 segments. Limit yourself to 25 words"
+                "Make sure the 4 segments tell a cohesive, progressive mini-story or explanation that builds toward a final point. "
                 "Label each section clearly as '1:', '2:', '3:', and '4:'. "
                 "Avoid generic breathing or meditation cues. Stay strictly on-topic."
             )
@@ -97,12 +99,18 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         st.error(f"Failed to generate or download voiceover: {e}")
         st.stop()
 
-    # Step 5: Generate background music
+    # Step 5: Generate background music with MusicGen
     st.info("Step 5: Creating background music")
     try:
         music_uri = run_replicate(
-            "google/lyria-2",
-            {"prompt": f"Background music for a cohesive, 20-second educational video about {video_topic}. Light, non-distracting, slightly cinematic tone."},
+            "meta/musicgen",
+            {
+                "prompt": f"Light, non-distracting, cinematic background music for educational video about {video_topic}. Instrumental, ambient, uplifting tone.",
+                "duration": 20,  # Exact 20 seconds to match video length
+                "model_version": "large",  # Use 'large' or 'melody'
+                "output_format": "mp3",
+                "normalization_strategy": "peak"
+            }
         )
         music_path = download_to_file(music_uri, suffix=".mp3")
         st.audio(music_path)
