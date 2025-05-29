@@ -21,11 +21,12 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         "prompt": f"Write a precise, vivid, emotionally engaging narration for a 20 second video on the topic: '{video_topic}', broken into four 5-second segments clearly marked as 1, 2, 3, 4. Keep timing and pacing in mind."
     })
 
-    st.success("Script written successfully")
-
-    # Extract 4 sections from script
-    script_parts = full_script.split("\n")
+    # Safely convert output to string
+    script_text = "".join(full_script) if isinstance(full_script, list) else full_script
+    script_parts = script_text.split("\n")
     script_segments = [s.strip() for s in script_parts if s.strip()][:4]
+
+    st.success("Script written successfully")
 
     temp_video_paths = []
 
@@ -36,7 +37,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             "num_frames": 120,  # 5 seconds * 24fps
             "fps": 24
         })
-        
+
         video_url = video_uri  # assume it's a direct URL
         video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
         os.system(f"curl -o {video_path} '{video_url}'")
