@@ -16,21 +16,6 @@ st.title("AI Multi-Agent Video Creator")
 replicate_api_key = st.text_input("Enter your Replicate API Key", type="password")
 video_topic = st.text_input("Enter a video topic (e.g., 'Why the Earth rotates')")
 
-# --- Voiceover Customization UI ---
-st.subheader("🎙️ Voiceover Settings")
-
-voice_id = st.selectbox("Choose a Voice", [
-    "Wise_Woman", "Friendly_Person", "Inspirational_girl", "Deep_Voice_Man",
-    "Calm_Woman", "Casual_Guy", "Lively_Girl", "Patient_Man", "Young_Knight",
-    "Determined_Man", "Lovely_Girl", "Decent_Boy", "Imposing_Manner",
-    "Elegant_Man", "Abbess", "Sweet_Girl_2", "Exuberant_Girl"
-], index=1)
-
-pitch = st.slider("Pitch", -10, 10, 0)
-speed = st.slider("Speed", 0.5, 2.0, 1.0, 0.1)
-volume = st.slider("Volume", 0.0, 2.0, 1.0, 0.1)
-emotion = st.selectbox("Emotion", ["neutral", "happy", "sad", "angry", "fear", "disgust", "surprise"], index=1)
-
 if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     replicate_client = replicate.Client(api_token=replicate_api_key)
 
@@ -103,19 +88,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     try:
         voiceover_uri = run_replicate(
             "minimax/speech-02-hd",
-            {
-                "text": full_narration,
-                "pitch": pitch,
-                "speed": speed,
-                "volume": volume,
-                "bitrate": 128000,
-                "channel": "mono",
-                "emotion": emotion,
-                "voice_id": voice_id,
-                "sample_rate": 32000,
-                "language_boost": "English",
-                "english_normalization": True
-            }
+            {"text": full_narration, "voice": "default"},
         )
         voice_path = download_to_file(voiceover_uri, suffix=".mp3")
         st.audio(voice_path)
@@ -138,20 +111,17 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         st.error(f"Failed to generate or download music: {e}")
         st.stop()
 
-    # Step 6: Merge audio and video (updated and fixed)
+    # Step 6: Merge audio and video
     st.info("Step 6: Merging final audio and video")
     try:
+        # Concatenate video clips
         final_video = concatenate_videoclips(segment_clips, method="compose")
-        final_duration = final_video.duration
+        final_duration = final_video.duration  # Should be 20s
 
-        # Load audio safely
-        voice_audio = AudioFileClip(voice_path)
-        music_audio = AudioFileClip(music_path)
-
-        voice_clip = voice_audio.subclip(0, min(final_duration, voice_audio.duration)).set_duration(final_duration)
-        music_clip = music_audio.subclip(0, min(final_duration, music_audio.duration)).volumex(0.3).set_duration(final_duration)
-
+        voice_clip = AudioFileClip(voice_path).subclip(0, final_duration).set_duration(final_duration)
+        music_clip = AudioFileClip(music_path).subclip(0, final_duration).set_duration(final_duration).volumex(0.3)
         final_audio = CompositeAudioClip([voice_clip, music_clip])
+
         final_video = final_video.set_audio(final_audio)
 
         output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
@@ -167,12 +137,6 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         st.success("🎬 Final video with narration and music is ready")
         st.video(output_path)
         st.download_button("📽 Download Final Video", output_path, "final_video.mp4")
-
-        # Close resources
-        voice_audio.close()
-        music_audio.close()
-        for clip in segment_clips:
-            clip.close()
 
     except Exception as e:
         st.warning("Final video merge failed, but you can still download individual assets.")
