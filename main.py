@@ -203,7 +203,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
                 "text": cleaned_narration, # Use the cleaned narration here
                 "voice_id": voice_options[selected_voice],
                 "emotion": selected_emotion,
-                "speed": 1.1,
+                "speed": 1.2,
                 "pitch": 0,
                 "volume": 1,
                 "bitrate": 128000,
@@ -240,6 +240,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         # Concatenate video clips
         final_video = concatenate_videoclips(segment_clips, method="compose")
         # Ensure the final video duration is exactly 20 seconds
+        # The voice clip will play for its full duration, even if it extends slightly past 20 seconds.
         final_video = final_video.set_duration(20)
         final_duration = final_video.duration
 
@@ -252,33 +253,25 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         music_volume = 0.3  # Lower music volume for better voice clarity
 
         # Fade in/out for music - 3 second fade out at the end
-        music_clip = music_clip.volumex(music_volume).audio_fadein(1).audio_fadeout(3)
+        music_clip = music_clip.volumex(music_volume).audio_fadein(1) # Apply fade-in
         voice_clip = voice_clip.volumex(voice_volume)
 
-        # FIXED AUDIO TIMING: Start voice early and keep video at 20s max
-        voice_start_time = 1.5  # Start voice at 1.5 seconds
-        
-        # Keep video at 20 seconds but ensure voice has enough time
-        # If voice is too long, it will extend slightly past video end but won't be cut
-        target_duration = 20  # Keep video at 20 seconds
-        final_video = final_video.set_duration(target_duration)
-        
-        # Set voice to start at specified time (no centering or truncation)
+        # Set voice to start at specified time. Its full duration will be maintained.
+        voice_start_time = 1.5
         voice_clip = voice_clip.set_start(voice_start_time)
         
-        # Adjust music to match final video duration
-        target_duration = final_video.duration
-        
-        if music_clip.duration > target_duration:
-            music_clip = music_clip.subclip(0, target_duration)
-        elif music_clip.duration < target_duration:
-            # Loop music if needed
-            loops_needed = int(target_duration / music_clip.duration) + 1
-            music_clips = [music_clip] * loops_needed
-            music_clip = concatenate_audioclips(music_clips).subclip(0, target_duration)
-        
+        # Adjust music to match final video duration, looping if needed
+        # and then apply the fade-out
+        if music_clip.duration > final_duration:
+            music_clip = music_clip.subclip(0, final_duration)
+        elif music_clip.duration < final_duration:
+            loops_needed = int(final_duration / music_clip.duration) + 1
+            music_clips_looped = [music_clip] * loops_needed
+            music_clip = concatenate_audioclips(music_clips_looped).subclip(0, final_duration)
+            
         # Apply the 3-second fade out to the final music clip
         music_clip = music_clip.audio_fadeout(3)
+
 
         final_audio = CompositeAudioClip([voice_clip, music_clip])
         final_video = final_video.set_audio(final_audio)
