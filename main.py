@@ -10,7 +10,6 @@ from moviepy.editor import (
     AudioFileClip,
     CompositeAudioClip,
     concatenate_audioclips,
-    AudioClip,
 )
 
 st.title("AI Multi-Agent Video Creator")
@@ -116,12 +115,11 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             "prompt": (
                 f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a 20-second educational video titled '{video_topic}'. "
                 "The video will be 20 seconds long; divide your script into 4 segments of approximately 5 seconds each. "
-                "Each segment should be ONLY 3-5 words (about 0.8-1.2 seconds of speech per segment, allowing for pacing). "
-                "Keep it very concise - total script should be maximum 16-20 words across all 4 segments. "
+                "Each segment should be 8-12 words (about 1.5-2 seconds of speech per segment, allowing for pacing). "
                 "Make sure the 4 segments tell a cohesive, progressive story that builds toward a compelling conclusion. "
-                "Use punchy, impactful language that translates well to visuals. "
+                "Use vivid, concrete language that translates well to visuals. Include specific details, numbers, or comparisons when relevant. "
                 "Label each section clearly as '1:', '2:', '3:', and '4:'. "
-                "Write in an engaging, conversational tone that keeps viewers hooked. Be extremely concise."
+                "Write in an engaging, conversational tone that keeps viewers hooked. Avoid generic statements."
             )
         },
     )
@@ -204,7 +202,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
                 "text": cleaned_narration, # Use the cleaned narration here
                 "voice_id": voice_options[selected_voice],
                 "emotion": selected_emotion,
-                "speed": 1.2,
+                "speed": 2,
                 "pitch": 0,
                 "volume": 1,
                 "bitrate": 128000,
@@ -235,51 +233,45 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         st.error(f"Failed to generate or download music: {e}")
         st.stop()
 
-    # Step 6: Merge audio and video - FIXED VERSION
+    # Step 6: Merge audio and video
     st.info("Step 6: Merging final audio and video")
     try:
         # Concatenate video clips
         final_video = concatenate_videoclips(segment_clips, method="compose")
-        # Keep video at exactly 20 seconds
+        # Ensure the final video duration is exactly 20 seconds
         final_video = final_video.set_duration(20)
-        final_duration = 20
+        final_duration = final_video.duration
 
-        # Load audio clips
+        # Improve audio mixing
         voice_clip = AudioFileClip(voice_path)
         music_clip = AudioFileClip(music_path)
 
-        # Debug: Check actual voice clip duration
-        st.info(f"Voice clip duration: {voice_clip.duration:.2f} seconds")
-
-        # Set voice timing
-        voice_start_time = 1.5
+        # Better volume balancing
         voice_volume = 1.0
-        music_volume = 0.3
+        music_volume = 0.2  # Lower music volume for better voice clarity
 
-        # Apply volume to voice and set start time
-        voice_clip = voice_clip.volumex(voice_volume).set_start(voice_start_time)
-        
-        # CRITICAL FIX: Extend voice clip to fill the entire video duration
-        # This prevents it from cutting off early in the composite
-        voice_end_time = voice_start_time + voice_clip.duration
-        if voice_end_time < final_duration:
-            # Add silence to extend voice track to full duration
-            silence_duration = final_duration - voice_end_time
-            silence = AudioClip(lambda t: [0, 0], duration=silence_duration).set_start(voice_end_time)
-            voice_clip = CompositeAudioClip([voice_clip, silence])
-        
-        # Adjust music to match final video duration (20s), looping if needed
-        if music_clip.duration > final_duration:
-            music_clip = music_clip.subclip(0, final_duration)
-        elif music_clip.duration < final_duration:
-            loops_needed = int(final_duration / music_clip.duration) + 1
-            music_clips_looped = [music_clip] * loops_needed
-            music_clip = concatenate_audioclips(music_clips_looped).subclip(0, final_duration)
-        
-        # Apply volume and fades to music
-        music_clip = music_clip.volumex(music_volume).audio_fadein(1).audio_fadeout(3)
+        # Fade in/out for music
+        music_clip = music_clip.volumex(music_volume).audio_fadein(1).audio_fadeout(1)
+        voice_clip = voice_clip.volumex(voice_volume)
 
-        # Composite the audio tracks - now both are full duration
+        # Ensure proper duration
+        target_duration = final_video.duration
+
+        if voice_clip.duration > target_duration:
+            voice_clip = voice_clip.subclip(0, target_duration)
+        elif voice_clip.duration < target_duration:
+            # Center the voice in the timeline
+            voice_start = (target_duration - voice_clip.duration) / 2
+            voice_clip = voice_clip.set_start(voice_start)
+
+        if music_clip.duration > target_duration:
+            music_clip = music_clip.subclip(0, target_duration)
+        elif music_clip.duration < target_duration:
+            # Loop music if needed
+            loops_needed = int(target_duration / music_clip.duration) + 1
+            music_clips = [music_clip] * loops_needed
+            music_clip = concatenate_audioclips(music_clips).subclip(0, target_duration)
+
         final_audio = CompositeAudioClip([voice_clip, music_clip])
         final_video = final_video.set_audio(final_audio)
 
@@ -293,7 +285,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             fps=24
         )
 
-        st.success("🎬 Final video with narration and music is ready (Duration: 20.0s)")
+        st.success("🎬 Final video with narration and music is ready")
         st.video(output_path)
         st.download_button("📽 Download Final Video", output_path, "final_video.mp4")
 
