@@ -37,21 +37,37 @@ voice_options = {
     "Exuberant Girl": "Exuberant_Girl"
 }
 
-selected_voice = st.selectbox(
-    "Choose a voice for your voiceover:",
-    options=list(voice_options.keys()),
-    index=0,  # Default to "Wise Woman"
-    help="Select the voice that will narrate your video"
-)
+# Video quality settings
+st.subheader("Video Settings")
+col1, col2 = st.columns(2)
 
-# Optional: Add emotion selection
-emotion_options = ["auto", "happy", "sad", "angry", "surprised", "fearful", "disgusted"]
-selected_emotion = st.selectbox(
-    "Choose voice emotion (optional):",
-    options=emotion_options,
-    index=0,  # Default to "auto"
-    help="Select the emotional tone for the voiceover"
-)
+with col1:
+    video_style = st.selectbox(
+        "Video Style:",
+        ["Documentary", "Cinematic", "Educational", "Modern", "Nature", "Scientific"],
+        help="Choose the visual style for your video"
+    )
+    
+    num_frames = st.selectbox(
+        "Video Quality:",
+        [("Standard (120 frames)", 120), ("High (200 frames)", 200)],
+        format_func=lambda x: x[0]
+    )[1]
+
+with col2:
+    selected_voice = st.selectbox(
+        "Choose a voice for your voiceover:",
+        options=list(voice_options.keys()),
+        index=0,
+        help="Select the voice that will narrate your video"
+    )
+    
+    selected_emotion = st.selectbox(
+        "Voice emotion:",
+        options=emotion_options,
+        index=0,
+        help="Select the emotional tone for the voiceover"
+    )
 
 if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     replicate_client = replicate.Client(api_token=replicate_api_key)
@@ -64,11 +80,13 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         "anthropic/claude-4-sonnet",
         {
             "prompt": (
-                f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a 15-word short educational video titled '{video_topic}'. "
-                "The video will be 20 seconds long; divide your script into 4 segments. Limit yourself to 15 words"
-                "Make sure the 4 segments tell a cohesive, progressive mini-story or explanation that builds toward a final point. "
+                f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a 20-second educational video titled '{video_topic}'. "
+                "The video will be 20 seconds long; divide your script into 4 segments of approximately 5 seconds each. "
+                "Each segment should be 8-12 words (about 1.5-2 seconds of speech per segment, allowing for pacing). "
+                "Make sure the 4 segments tell a cohesive, progressive story that builds toward a compelling conclusion. "
+                "Use vivid, concrete language that translates well to visuals. Include specific details, numbers, or comparisons when relevant. "
                 "Label each section clearly as '1:', '2:', '3:', and '4:'. "
-                "Avoid generic breathing or meditation cues. Stay strictly on-topic."
+                "Write in an engaging, conversational tone that keeps viewers hooked. Avoid generic statements."
             )
         },
     )
@@ -102,11 +120,27 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     # Step 2: Generate segment visuals
     for i, segment in enumerate(script_segments):
         st.info(f"Step 2.{i+1}: Generating visuals for segment {i+1}")
-        video_prompt = f"Scene for a video about '{video_topic}'. This part should illustrate: {segment}"
+        # Create more detailed, cinematic prompts
+        if i == 0:
+            shot_type = "establishing wide shot"
+        elif i == 1:
+            shot_type = "medium shot with focus on key elements"
+        elif i == 2:
+            shot_type = "close-up shot showing important details"
+        else:
+            shot_type = "dynamic concluding shot"
+            
+        video_prompt = f"Cinematic {shot_type} for educational video about '{video_topic}'. Visual content: {segment}. Style: clean, professional, well-lit, documentary quality. Camera movement: smooth, purposeful. No text overlays."
         try:
             video_uri = run_replicate(
                 "luma/ray-flash-2-540p",
-                {"prompt": video_prompt, "num_frames": 120, "fps": 24},
+                {
+                    "prompt": video_prompt, 
+                    "num_frames": num_frames, 
+                    "fps": 24,
+                    "guidance": 3.0,  # Higher guidance for better prompt adherence
+                    "num_inference_steps": 30  # More steps for better quality
+                },
             )
             video_path = download_to_file(video_uri, suffix=".mp4")
             temp_video_paths.append(video_path)
