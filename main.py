@@ -37,8 +37,6 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     )
 
     script_text = "".join(full_script) if isinstance(full_script, list) else full_script
-
-    # Improved script extraction logic using regex
     script_segments = re.findall(r"\d+:\s*(.+)", script_text)
 
     if len(script_segments) < 4:
@@ -46,8 +44,6 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         st.stop()
 
     st.success("Script written successfully")
-
-    # Save script for download
     script_file_path = tempfile.NamedTemporaryFile(delete=False, suffix=".txt").name
     with open(script_file_path, "w") as f:
         f.write("\n\n".join(script_segments))
@@ -64,6 +60,8 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
                 f.write(chunk)
         return tmp.name
 
+    segment_clips = []
+
     # Step 2: Generate segment visuals
     for i, segment in enumerate(script_segments):
         st.info(f"Step 2.{i+1}: Generating visuals for segment {i+1}")
@@ -75,6 +73,11 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             )
             video_path = download_to_file(video_uri, suffix=".mp4")
             temp_video_paths.append(video_path)
+
+            # Ensure 5s per segment
+            clip = VideoFileClip(video_path).subclip(0, 5)
+            segment_clips.append(clip)
+
             st.video(video_path)
             st.download_button(f"🎥 Download Segment {i+1}", video_path, f"segment_{i+1}.mp4")
         except Exception as e:
@@ -110,34 +113,35 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         st.error(f"Failed to generate or download music: {e}")
         st.stop()
 
-    # Step 6: Merge audio tracks with video
+    # Step 6: Merge audio and video
     st.info("Step 6: Merging final audio and video")
-    video_clip = VideoFileClip(temp_video_paths[0])  # Use first clip to get duration
-    duration = video_clip.duration
-
-    voice_clip = AudioFileClip(voice_path).subclip(0, duration).set_duration(duration)
-    music_clip = AudioFileClip(music_path).subclip(0, duration).set_duration(duration).volumex(0.3)
-
-    final_audio = CompositeAudioClip([voice_clip, music_clip])
-
     try:
         # Concatenate video clips
-        final_video = concatenate_videoclips([VideoFileClip(path) for path in temp_video_paths], method="compose")
-        final_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        final_video.write_videofile(final_video_path, codec="libx264", audio=False)
+        final_video = concatenate_videoclips(segment_clips, method="compose")
+        final_duration = final_video.duration  # Should be 20s
 
-        # Apply audio
-        video_with_audio = final_video.set_audio(final_audio)
+        voice_clip = AudioFileClip(voice_path).subclip(0, final_duration).set_duration(final_duration)
+        music_clip = AudioFileClip(music_path).subclip(0, final_duration).set_duration(final_duration).volumex(0.3)
+        final_audio = CompositeAudioClip([voice_clip, music_clip])
+
+        final_video = final_video.set_audio(final_audio)
 
         output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        video_with_audio.write_videofile(output_path, codec="libx264", audio_codec="aac", temp_audiofile="temp-audio.m4a", remove_temp=True)
+        final_video.write_videofile(
+            output_path,
+            codec="libx264",
+            audio_codec="aac",
+            temp_audiofile="temp-audio.m4a",
+            remove_temp=True,
+            fps=24
+        )
 
         st.success("🎬 Final video with narration and music is ready")
         st.video(output_path)
         st.download_button("📽 Download Final Video", output_path, "final_video.mp4")
 
     except Exception as e:
-        st.warning(f"Final video merge failed, but you can still download individual assets.")
+        st.warning("Final video merge failed, but you can still download individual assets.")
         st.error(f"Error writing final video: {e}")
 
     # Cleanup
