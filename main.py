@@ -27,8 +27,8 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         "anthropic/claude-4-sonnet",
         {
             "prompt": (
-                f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a 20 second short educational video titled '{video_topic}'. "
-                "The video will be 20 seconds long, so divide your script into 4 segments, each segment being 5 seconds. "
+                f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a 10 second short educational video titled '{video_topic}'. "
+                "The video will be 10 seconds long, so divide your script into 4 segments, each segment being 5 seconds. "
                 "Make sure the 4 segments tell a cohesive, progressive mini-story or explanation that builds toward a final point. "
                 "Label each section clearly as '1:', '2:', '3:', and '4:'. "
                 "Avoid generic breathing or meditation cues. Stay strictly on-topic."
