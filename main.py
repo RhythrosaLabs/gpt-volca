@@ -99,18 +99,12 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         st.error(f"Failed to generate or download voiceover: {e}")
         st.stop()
 
-    # Step 5: Generate background music with MusicGen
+    # Step 5: Generate background music
     st.info("Step 5: Creating background music")
     try:
         music_uri = run_replicate(
-            "meta/musicgen",
-            {
-                "prompt": f"Light, non-distracting, cinematic background music for educational video about {video_topic}. Instrumental, ambient, uplifting tone.",
-                "duration": 20,  # Exact 20 seconds to match video length
-                "model_version": "large",  # Use 'large' or 'melody'
-                "output_format": "mp3",
-                "normalization_strategy": "peak"
-            }
+            "google/lyria-2",
+            {"prompt": f"Background music for a cohesive, 20-second educational video about {video_topic}. Light, non-distracting, slightly cinematic tone."},
         )
         music_path = download_to_file(music_uri, suffix=".mp3")
         st.audio(music_path)
