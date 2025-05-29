@@ -10,7 +10,6 @@ from moviepy.editor import (
     AudioFileClip,
     CompositeAudioClip,
 )
-from moviepy.audio.tools.cuts import AudioInterval
 
 st.title("AI Multi-Agent Video Creator")
 
