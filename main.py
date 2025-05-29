@@ -43,7 +43,7 @@ emotion_options = ["auto", "happy", "sad", "angry", "surprised", "fearful", "dis
 
 # Video quality settings
 st.subheader("Video Settings")
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
     video_style = st.selectbox(
@@ -52,15 +52,28 @@ with col1:
         help="Choose the visual style for your video"
     )
     
+    aspect_ratio = st.selectbox(
+        "Video Dimensions:",
+        ["16:9", "9:16", "1:1", "4:3"],
+        help="Choose aspect ratio for your video"
+    )
+
+with col2:
     num_frames = st.selectbox(
         "Video Quality:",
         [("Standard (120 frames)", 120), ("High (200 frames)", 200)],
         format_func=lambda x: x[0]
     )[1]
+    
+    enable_loop = st.checkbox(
+        "Loop video segments",
+        value=False,
+        help="Make video segments loop smoothly"
+    )
 
-with col2:
+with col3:
     selected_voice = st.selectbox(
-        "Choose a voice for your voiceover:",
+        "Voice:",
         options=list(voice_options.keys()),
         index=0,
         help="Select the voice that will narrate your video"
@@ -72,6 +85,22 @@ with col2:
         index=0,
         help="Select the emotional tone for the voiceover"
     )
+
+# Camera movement options
+st.subheader("Camera Movement (Optional)")
+camera_concepts = [
+    "static", "zoom_in", "zoom_out", "pan_left", "pan_right", 
+    "tilt_up", "tilt_down", "orbit_left", "orbit_right", 
+    "push_in", "pull_out", "crane_up", "crane_down",
+    "aerial", "aerial_drone", "handheld", "dolly_zoom"
+]
+
+selected_concepts = st.multiselect(
+    "Choose camera movements (will be applied randomly to segments):",
+    options=camera_concepts,
+    default=["static", "zoom_in", "pan_right"],
+    help="Select camera movements to make your video more dynamic"
+)
 
 if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     replicate_client = replicate.Client(api_token=replicate_api_key)
@@ -109,6 +138,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
     st.download_button("📜 Download Script", script_file_path, "script.txt")
 
     temp_video_paths = []
+    segment_clips = []
 
     def download_to_file(url: str, suffix: str):
         resp = requests.get(url, stream=True)
