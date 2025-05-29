@@ -138,14 +138,19 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         st.error(f"Failed to generate or download music: {e}")
         st.stop()
 
-    # Step 6: Merge audio and video
+    # Step 6: Merge audio and video (updated and fixed)
     st.info("Step 6: Merging final audio and video")
     try:
         final_video = concatenate_videoclips(segment_clips, method="compose")
         final_duration = final_video.duration
 
-        voice_clip = AudioFileClip(voice_path).subclip(0, final_duration).set_duration(final_duration)
-        music_clip = AudioFileClip(music_path).subclip(0, final_duration).set_duration(final_duration).volumex(0.3)
+        # Load audio safely
+        voice_audio = AudioFileClip(voice_path)
+        music_audio = AudioFileClip(music_path)
+
+        voice_clip = voice_audio.subclip(0, min(final_duration, voice_audio.duration)).set_duration(final_duration)
+        music_clip = music_audio.subclip(0, min(final_duration, music_audio.duration)).volumex(0.3).set_duration(final_duration)
+
         final_audio = CompositeAudioClip([voice_clip, music_clip])
         final_video = final_video.set_audio(final_audio)
 
@@ -162,6 +167,13 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         st.success("🎬 Final video with narration and music is ready")
         st.video(output_path)
         st.download_button("📽 Download Final Video", output_path, "final_video.mp4")
+
+        # Close resources
+        voice_audio.close()
+        music_audio.close()
+        for clip in segment_clips:
+            clip.close()
+
     except Exception as e:
         st.warning("Final video merge failed, but you can still download individual assets.")
         st.error(f"Error writing final video: {e}")
