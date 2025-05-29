@@ -47,6 +47,12 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
 
     st.success("Script written successfully")
 
+    # Save script for download
+    script_file_path = tempfile.NamedTemporaryFile(delete=False, suffix=".txt").name
+    with open(script_file_path, "w") as f:
+        f.write("\n\n".join(script_segments))
+    st.download_button("📜 Download Script", script_file_path, "script.txt")
+
     temp_video_paths = []
 
     def download_to_file(url: str, suffix: str):
@@ -69,17 +75,11 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             )
             video_path = download_to_file(video_uri, suffix=".mp4")
             temp_video_paths.append(video_path)
+            st.video(video_path)
+            st.download_button(f"🎥 Download Segment {i+1}", video_path, f"segment_{i+1}.mp4")
         except Exception as e:
             st.error(f"Failed to generate or download segment {i+1} video: {e}")
             st.stop()
-
-    # Step 3: Concatenate videos
-    st.info("Step 3: Concatenating video segments")
-    clips = [VideoFileClip(path) for path in temp_video_paths]
-    final_video = concatenate_videoclips(clips, method="compose")
-    final_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-    final_video.write_videofile(final_video_path, codec="libx264", audio=False)
-    st.success("Video visuals compiled")
 
     # Step 4: Generate voiceover
     st.info("Step 4: Generating voiceover narration")
@@ -90,6 +90,8 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             {"text": full_narration, "voice": "default"},
         )
         voice_path = download_to_file(voiceover_uri, suffix=".mp3")
+        st.audio(voice_path)
+        st.download_button("🎙 Download Voiceover", voice_path, "voiceover.mp3")
     except Exception as e:
         st.error(f"Failed to generate or download voiceover: {e}")
         st.stop()
@@ -102,35 +104,44 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             {"prompt": f"Background music for a cohesive, 20-second educational video about {video_topic}. Light, non-distracting, slightly cinematic tone."},
         )
         music_path = download_to_file(music_uri, suffix=".mp3")
+        st.audio(music_path)
+        st.download_button("🎵 Download Background Music", music_path, "background_music.mp3")
     except Exception as e:
         st.error(f"Failed to generate or download music: {e}")
         st.stop()
 
     # Step 6: Merge audio tracks with video
     st.info("Step 6: Merging final audio and video")
-    video_clip = VideoFileClip(final_video_path)
+    video_clip = VideoFileClip(temp_video_paths[0])  # Use first clip to get duration
     duration = video_clip.duration
 
     voice_clip = AudioFileClip(voice_path).subclip(0, duration).set_duration(duration)
     music_clip = AudioFileClip(music_path).subclip(0, duration).set_duration(duration).volumex(0.3)
 
     final_audio = CompositeAudioClip([voice_clip, music_clip])
-    video_with_audio = video_clip.set_audio(final_audio)
 
-    output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
     try:
-        video_with_audio.write_videofile(
-            output_path, codec="libx264", audio_codec="aac", temp_audiofile="temp-audio.m4a", remove_temp=True
-        )
-    except Exception as e:
-        st.error(f"Error writing final video: {e}")
-        st.stop()
+        # Concatenate video clips
+        final_video = concatenate_videoclips([VideoFileClip(path) for path in temp_video_paths], method="compose")
+        final_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+        final_video.write_videofile(final_video_path, codec="libx264", audio=False)
 
-    st.success("🎬 Final video with narration and music is ready")
-    st.video(output_path)
+        # Apply audio
+        video_with_audio = final_video.set_audio(final_audio)
+
+        output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+        video_with_audio.write_videofile(output_path, codec="libx264", audio_codec="aac", temp_audiofile="temp-audio.m4a", remove_temp=True)
+
+        st.success("🎬 Final video with narration and music is ready")
+        st.video(output_path)
+        st.download_button("📽 Download Final Video", output_path, "final_video.mp4")
+
+    except Exception as e:
+        st.warning(f"Final video merge failed, but you can still download individual assets.")
+        st.error(f"Error writing final video: {e}")
 
     # Cleanup
-    for path in (*temp_video_paths, final_video_path, voice_path, music_path):
+    for path in (*temp_video_paths, voice_path, music_path, script_file_path):
         try:
             os.remove(path)
         except OSError:
