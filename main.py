@@ -1,383 +1,254 @@
 import streamlit as st
-import requests
-import time
-import moviepy.editor as mpe
+import replicate
 import os
-import tempfile
-import re
+import requests
+import zipfile
+import io
+from datetime import datetime
 
-st.title("🎬 Multi-Agent AI Video Creator (Replicate)")
+# Set page config
+st.set_page_config(page_title="AI Video Generator", page_icon="🎬", layout="wide")
 
-replicate_api = st.text_input("🔑 Enter Replicate API Key", type="password")
-topic = st.text_input("🎯 Enter your video topic", placeholder="e.g., why the earth rotates")
-
-def poll_prediction(prediction_url, headers, max_wait=300):
-    """Poll Replicate prediction until completion"""
-    start_time = time.time()
-    while time.time() - start_time < max_wait:
-        try:
-            response = requests.get(prediction_url, headers=headers)
-            if response.status_code != 200:
-                st.error(f"❌ API Error: {response.status_code} - {response.text}")
-                return None
-            
-            prediction = response.json()
-            status = prediction.get("status")
-            
-            st.write(f"Status: {status}")  # Debug info
-            
-            if status == "succeeded":
-                return prediction.get("output")
-            elif status == "failed":
-                error_msg = prediction.get("error", "Unknown error")
-                st.error(f"❌ Prediction failed: {error_msg}")
-                return None
-            elif status in ["starting", "processing"]:
-                st.write(f"⏳ {status.title()}...")
-            
-            time.sleep(3)
-        except Exception as e:
-            st.error(f"❌ Polling error: {str(e)}")
-            return None
-    
-    st.error("❌ Prediction timed out")
-    return None
-
-if replicate_api and topic and st.button("Generate Video"):
-    headers = {
-        "Authorization": f"Token {replicate_api}",
-        "Content-Type": "application/json"
-    }
-
+def download_video(url, filename):
+    """Download video from URL"""
     try:
-        # Step 1: Generate script
-        with st.spinner("📝 Writing script..."):
-            script_prompt = f"""Write a short 20-second video script about '{topic}'. 
-            Break it into exactly 4 short sentences, each representing a 5-second segment. 
-            Format as a numbered list:
-            1. [First sentence]
-            2. [Second sentence] 
-            3. [Third sentence]
-            4. [Fourth sentence]
-            
-            Keep each sentence under 15 words and focused on visual descriptions."""
-            
-            # Updated Llama model version
-            script_response = requests.post(
-                "https://api.replicate.com/v1/predictions",
-                headers=headers,
-                json={
-                    "version": "meta/meta-llama-3-8b-instruct",  # Updated model reference
-                    "input": {
-                        "prompt": script_prompt,
-                        "max_new_tokens": 200,
-                        "temperature": 0.7
-                    }
-                }
-            )
-            
-            st.write(f"Script API Response Status: {script_response.status_code}")  # Debug
-            
-            if script_response.status_code != 201:
-                st.error(f"❌ Script generation failed: {script_response.status_code}")
-                st.write("Response:", script_response.text)  # Debug
-                st.stop()
-            
-            prediction = script_response.json()
-            st.write("Prediction object:", prediction)  # Debug
-            
-            script_output = poll_prediction(prediction["urls"]["get"], headers)
-            
-            if not script_output:
-                st.error("❌ Script generation failed.")
-                st.stop()
-            
-            st.write("Raw script output:", script_output)  # Debug
-            
-            # Extract script text from output
-            if isinstance(script_output, list):
-                script_text = "".join(script_output)
-            else:
-                script_text = str(script_output)
-            
-            st.write("Processed script text:", script_text)  # Debug
-            
-            # Parse the script into sections with better regex
-            sections = []
-            
-            # Try different parsing methods
-            # Method 1: Look for numbered lists
-            numbered_pattern = r'(\d+\.?\s*)(.*?)(?=\d+\.|\Z)'
-            matches = re.findall(numbered_pattern, script_text, re.DOTALL)
-            
-            if matches:
-                for _, content in matches:
-                    clean_content = content.strip().replace('\n', ' ')
-                    if len(clean_content) > 5:
-                        sections.append(clean_content)
-            
-            # Method 2: Split by sentences if numbered parsing fails
-            if len(sections) < 4:
-                sentences = re.split(r'[.!?]+', script_text)
-                sections = [s.strip() for s in sentences if len(s.strip()) > 10][:4]
-            
-            # Method 3: Fallback to topic-based sections
-            if len(sections) < 4:
-                sections = [
-                    f"Introduction to {topic} and its basic concept",
-                    f"The main mechanisms behind {topic}",
-                    f"Key factors that influence {topic}",
-                    f"The importance and impact of {topic}"
-                ]
-            
-            # Ensure we have exactly 4 sections
-            sections = sections[:4]
-            while len(sections) < 4:
-                sections.append(f"Additional aspects of {topic}")
-            
-            st.success("✅ Script generated!")
-
-        st.write("### Generated Script:")
-        for i, line in enumerate(sections):
-            st.markdown(f"**Part {i+1}**: {line}")
-
-        # Create temporary directory for files
-        temp_dir = tempfile.mkdtemp()
-        video_paths = []
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
         
-        # Step 2: Generate 4 videos
-        for i, section in enumerate(sections):
-            with st.spinner(f"🎥 Generating video {i+1}/4..."):
-                video_prompt = f"A cinematic shot illustrating: {section}. High quality, professional lighting, smooth camera movement, detailed visual."
-                
-                video_response = requests.post(
-                    "https://api.replicate.com/v1/predictions",
-                    headers=headers,
-                    json={
-                        "version": "runwayml/gen-3-alpha-turbo",  # Updated model reference
-                        "input": {
-                            "prompt": video_prompt,
-                            "duration": 5,
-                            "aspect_ratio": "16:9"
-                        }
-                    }
-                )
-                
-                if video_response.status_code != 201:
-                    st.error(f"❌ Video {i+1} generation failed: {video_response.text}")
-                    continue
-                
-                prediction = video_response.json()
-                video_url = poll_prediction(prediction["urls"]["get"], headers, max_wait=600)
-                
-                if video_url:
-                    # Handle different response formats
-                    if isinstance(video_url, dict) and 'mp4' in video_url:
-                        video_url = video_url['mp4']
-                    elif isinstance(video_url, list) and len(video_url) > 0:
-                        video_url = video_url[0]
-                    
-                    try:
-                        video_path = os.path.join(temp_dir, f"video_part_{i}.mp4")
-                        video_content = requests.get(video_url)
-                        if video_content.status_code == 200:
-                            with open(video_path, "wb") as f:
-                                f.write(video_content.content)
-                            video_paths.append(video_path)
-                            st.success(f"✅ Video {i+1} completed!")
-                        else:
-                            st.error(f"❌ Failed to download video {i+1}")
-                    except Exception as e:
-                        st.error(f"❌ Error saving video {i+1}: {str(e)}")
-                else:
-                    st.error(f"❌ Video part {i+1} failed")
-
-        if len(video_paths) == 0:
-            st.error("❌ No videos were generated successfully.")
-            st.stop()
-
-        # Step 3: Concatenate videos
-        with st.spinner("📽️ Concatenating videos..."):
-            clips = []
-            for path in video_paths:
-                if os.path.exists(path):
-                    try:
-                        clip = mpe.VideoFileClip(path)
-                        clips.append(clip)
-                    except Exception as e:
-                        st.warning(f"⚠️ Could not load video clip: {str(e)}")
-            
-            if clips:
-                final_video = mpe.concatenate_videoclips(clips, method="compose")
-                final_video_path = os.path.join(temp_dir, "final_video.mp4")
-                final_video.write_videofile(
-                    final_video_path, 
-                    codec="libx264", 
-                    audio_codec="aac",
-                    temp_audiofile=os.path.join(temp_dir, "temp_audio.m4a"),
-                    verbose=False,
-                    logger=None
-                )
-                
-                # Close clips to free memory
-                for clip in clips:
-                    clip.close()
-                final_video.close()
-                st.success("✅ Videos concatenated!")
-
-        # Step 4: Generate voiceover
-        with st.spinner("🎙️ Generating voiceover..."):
-            full_script = ". ".join(sections)
-            
-            voice_response = requests.post(
-                "https://api.replicate.com/v1/predictions",
-                headers=headers,
-                json={
-                    "version": "elevenlabs/eleven-multilingual-v2",  # Updated model reference
-                    "input": {
-                        "text": full_script,
-                        "voice": "Chris",
-                        "model_id": "eleven_multilingual_v2"
-                    }
-                }
-            )
-            
-            voice_path = None
-            if voice_response.status_code == 201:
-                prediction = voice_response.json()
-                voice_url = poll_prediction(prediction["urls"]["get"], headers)
-                
-                if voice_url:
-                    try:
-                        voice_path = os.path.join(temp_dir, "voiceover.mp3")
-                        voice_content = requests.get(voice_url)
-                        if voice_content.status_code == 200:
-                            with open(voice_path, "wb") as f:
-                                f.write(voice_content.content)
-                            st.success("✅ Voiceover generated!")
-                        else:
-                            st.warning("⚠️ Failed to download voiceover")
-                    except Exception as e:
-                        st.warning(f"⚠️ Voiceover error: {str(e)}")
-                else:
-                    st.warning("⚠️ Voiceover generation failed")
-            else:
-                st.warning("⚠️ Voiceover API call failed")
-
-        # Step 5: Generate background music
-        with st.spinner("🎵 Generating background music..."):
-            music_response = requests.post(
-                "https://api.replicate.com/v1/predictions",
-                headers=headers,
-                json={
-                    "version": "meta/musicgen-melody",  # Updated model reference
-                    "input": {
-                        "prompt": f"Cinematic background music for {topic}, instrumental, ambient, calm",
-                        "duration": 20,
-                        "continuation": False
-                    }
-                }
-            )
-            
-            music_path = None
-            if music_response.status_code == 201:
-                prediction = music_response.json()
-                music_url = poll_prediction(prediction["urls"]["get"], headers)
-                
-                if music_url:
-                    try:
-                        music_path = os.path.join(temp_dir, "music.wav")
-                        music_content = requests.get(music_url)
-                        if music_content.status_code == 200:
-                            with open(music_path, "wb") as f:
-                                f.write(music_content.content)
-                            st.success("✅ Background music generated!")
-                        else:
-                            st.warning("⚠️ Failed to download music")
-                    except Exception as e:
-                        st.warning(f"⚠️ Music error: {str(e)}")
-                else:
-                    st.warning("⚠️ Music generation failed")
-            else:
-                st.warning("⚠️ Music API call failed")
-
-        # Step 6: Combine everything
-        with st.spinner("🎬 Finalizing video..."):
-            video = mpe.VideoFileClip(final_video_path)
-            audio_clips = []
-            
-            # Add voiceover if available
-            if voice_path and os.path.exists(voice_path):
-                try:
-                    voice_audio = mpe.AudioFileClip(voice_path)
-                    # Adjust voice duration to match video
-                    if voice_audio.duration > video.duration:
-                        voice_audio = voice_audio.subclip(0, video.duration)
-                    audio_clips.append(voice_audio.volumex(1.0))
-                except Exception as e:
-                    st.warning(f"⚠️ Could not process voiceover: {str(e)}")
-            
-            # Add background music if available
-            if music_path and os.path.exists(music_path):
-                try:
-                    music_audio = mpe.AudioFileClip(music_path)
-                    # Loop or trim music to match video duration
-                    if music_audio.duration < video.duration:
-                        music_audio = music_audio.loop(duration=video.duration)
-                    else:
-                        music_audio = music_audio.subclip(0, video.duration)
-                    audio_clips.append(music_audio.volumex(0.3))
-                except Exception as e:
-                    st.warning(f"⚠️ Could not process music: {str(e)}")
-            
-            # Combine audio
-            if audio_clips:
-                try:
-                    final_audio = mpe.CompositeAudioClip(audio_clips)
-                    video = video.set_audio(final_audio)
-                except Exception as e:
-                    st.warning(f"⚠️ Could not combine audio: {str(e)}")
-            
-            final_output_path = os.path.join(temp_dir, "final_output.mp4")
-            video.write_videofile(
-                final_output_path, 
-                codec="libx264", 
-                audio_codec="aac",
-                temp_audiofile=os.path.join(temp_dir, "temp_final_audio.m4a"),
-                verbose=False,
-                logger=None
-            )
-            video.close()
-            
-            # Clean up audio clips
-            for clip in audio_clips:
-                clip.close()
-
-        st.success("✅ Your video is ready!")
-        
-        # Display the video
-        if os.path.exists(final_output_path):
-            st.video(final_output_path)
-            
-            # Offer download
-            with open(final_output_path, "rb") as f:
-                st.download_button(
-                    label="📥 Download Video",
-                    data=f.read(),
-                    file_name="ai_generated_video.mp4",
-                    mime="video/mp4"
-                )
-
+        with open(filename, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        return True
     except Exception as e:
-        st.error(f"❌ An error occurred: {str(e)}")
-        import traceback
-        st.write("Full error:", traceback.format_exc())  # Debug info
+        st.error(f"Error downloading {filename}: {str(e)}")
+        return False
+
+def create_zip_file(video_files):
+    """Create a zip file containing all videos"""
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for video_file in video_files:
+            if os.path.exists(video_file):
+                zip_file.write(video_file, os.path.basename(video_file))
+    
+    zip_buffer.seek(0)
+    return zip_buffer
+
+def generate_video_with_model(prompt, model_name, model_identifier, duration=None):
+    """Generate video using specified model"""
+    try:
+        st.write(f"🎬 Generating video with {model_name}...")
         
-    finally:
-        # Clean up temporary files
-        try:
-            if 'temp_dir' in locals():
-                import shutil
-                shutil.rmtree(temp_dir, ignore_errors=True)
-        except:
-            pass
+        # Different input parameters for different models
+        if "runway" in model_identifier.lower():
+            input_params = {
+                "prompt": prompt,
+            }
+            if duration:
+                input_params["duration"] = duration
+        elif "zeroscope" in model_identifier.lower():
+            input_params = {
+                "prompt": prompt,
+                "num_frames": 24 if duration and duration <= 3 else 40,
+                "num_inference_steps": 50
+            }
+        elif "stable-video" in model_identifier.lower():
+            input_params = {
+                "input": prompt,  # Some models use 'input' instead of 'prompt'
+            }
+            if duration:
+                input_params["video_length"] = duration
+        else:
+            # Generic parameters
+            input_params = {
+                "prompt": prompt,
+            }
+            if duration:
+                input_params["duration"] = duration
+        
+        output = replicate.run(model_identifier, input=input_params)
+        
+        # Handle different output formats
+        if isinstance(output, list) and len(output) > 0:
+            video_url = output[0] if isinstance(output[0], str) else str(output[0])
+        elif isinstance(output, str):
+            video_url = output
+        elif hasattr(output, 'url'):
+            video_url = output.url
+        else:
+            video_url = str(output)
+        
+        return video_url
+        
+    except Exception as e:
+        error_msg = str(e)
+        st.error(f"❌ {model_name} generation failed: {error_msg}")
+        return None
+
+# Available models with their correct identifiers
+AVAILABLE_MODELS = {
+    "Zeroscope V2 XL": "anotherjesse/zeroscope-v2-xl",
+    "Stable Video Diffusion": "stability-ai/stable-video-diffusion",
+    "Text2Video Zero": "cjwbw/text2video-zero",
+    "Runway ML": "runwayml/stable-video-diffusion"  # Check if this is available
+}
+
+# Streamlit UI
+st.title("🎬 AI Video Generator")
+st.write("Generate multiple videos simultaneously using different AI models!")
+
+# API Key input
+api_key = st.text_input("Enter your Replicate API Token:", type="password")
+
+if api_key:
+    os.environ["REPLICATE_API_TOKEN"] = api_key
+    
+    # Input section
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        prompt = st.text_area(
+            "Video Prompt:", 
+            placeholder="Describe the video you want to generate...",
+            height=100
+        )
+    
+    with col2:
+        st.write("**Settings:**")
+        
+        # Model selection
+        selected_models = st.multiselect(
+            "Select Models:",
+            options=list(AVAILABLE_MODELS.keys()),
+            default=["Zeroscope V2 XL", "Stable Video Diffusion"]
+        )
+        
+        duration = st.selectbox(
+            "Video Duration (seconds):",
+            options=[3, 5, 8, 10],
+            index=0
+        )
+        
+        num_videos = st.slider(
+            "Number of variations per model:",
+            min_value=1,
+            max_value=3,
+            value=1
+        )
+    
+    # Generate button
+    if st.button("🎬 Generate Videos", type="primary"):
+        if not prompt.strip():
+            st.error("Please enter a video prompt!")
+        elif not selected_models:
+            st.error("Please select at least one model!")
+        else:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            total_videos = len(selected_models) * num_videos
+            current_video = 0
+            
+            video_results = []
+            successful_videos = []
+            
+            # Create columns for video display
+            if total_videos <= 2:
+                video_cols = st.columns(total_videos)
+            else:
+                video_cols = st.columns(3)
+            
+            for model_idx, model_name in enumerate(selected_models):
+                model_identifier = AVAILABLE_MODELS[model_name]
+                
+                for variation in range(num_videos):
+                    current_video += 1
+                    progress = current_video / total_videos
+                    progress_bar.progress(progress)
+                    status_text.text(f"Generating video {current_video}/{total_videos} - {model_name} (Variation {variation + 1})")
+                    
+                    # Generate video
+                    video_url = generate_video_with_model(prompt, model_name, model_identifier, duration)
+                    
+                    if video_url:
+                        video_results.append({
+                            'model': model_name,
+                            'variation': variation + 1,
+                            'url': video_url,
+                            'filename': f"{model_name.replace(' ', '_')}_v{variation + 1}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+                        })
+                        
+                        # Display video in appropriate column
+                        col_idx = (current_video - 1) % len(video_cols)
+                        with video_cols[col_idx]:
+                            st.write(f"**{model_name} - Variation {variation + 1}**")
+                            st.video(video_url)
+                            
+                            # Download button for individual video
+                            if st.button(f"📥 Download", key=f"download_{current_video}"):
+                                if download_video(video_url, video_results[-1]['filename']):
+                                    st.success(f"Downloaded: {video_results[-1]['filename']}")
+            
+            progress_bar.progress(1.0)
+            status_text.text("✅ Generation complete!")
+            
+            # Results summary
+            if video_results:
+                st.success(f"🎉 Successfully generated {len(video_results)} videos!")
+                
+                # Download all videos button
+                st.write("### 📦 Download All Videos")
+                
+                if st.button("📥 Download All as ZIP"):
+                    with st.spinner("Preparing download..."):
+                        # Download all videos
+                        downloaded_files = []
+                        for result in video_results:
+                            if download_video(result['url'], result['filename']):
+                                downloaded_files.append(result['filename'])
+                        
+                        if downloaded_files:
+                            # Create ZIP file
+                            zip_buffer = create_zip_file(downloaded_files)
+                            
+                            # Provide download button
+                            st.download_button(
+                                label="📦 Download ZIP File",
+                                data=zip_buffer.getvalue(),
+                                file_name=f"ai_videos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                                mime="application/zip"
+                            )
+                            
+                            # Clean up individual files
+                            for file in downloaded_files:
+                                try:
+                                    os.remove(file)
+                                except:
+                                    pass
+                        else:
+                            st.error("Failed to download videos for ZIP creation.")
+                
+                # Display generation details
+                with st.expander("📊 Generation Details"):
+                    for result in video_results:
+                        st.write(f"- **{result['model']}** (Variation {result['variation']}): [View Video]({result['url']})")
+            
+            else:
+                st.error("❌ No videos were generated successfully. Please check your API token and try again.")
+
+else:
+    st.info("👆 Please enter your Replicate API token to get started!")
+    
+    with st.expander("ℹ️ How to get your Replicate API Token"):
+        st.write("""
+        1. Go to [Replicate.com](https://replicate.com)
+        2. Sign up or log in to your account
+        3. Go to your account settings
+        4. Find the "API Tokens" section
+        5. Copy your token and paste it above
+        """)
+
+# Footer
+st.markdown("---")
+st.markdown("🎬 **AI Video Generator** - Generate amazing videos with AI!")
