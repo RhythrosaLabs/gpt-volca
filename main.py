@@ -214,92 +214,213 @@ Label each section as '1:', '2:', '3:', and '4:'."""
 
     # Step 6: Create final commercial with improved audio/video sync
     st.info("Step 6: Assembling final commercial")
+    
+    # Progress tracking
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
     try:
-        # Concatenate video clips - should be exactly 20 seconds
-        final_video = concatenate_videoclips(segment_clips, method="compose")
-        target_duration = 20.0  # Exact target duration
+        # Step 6a: Concatenate video clips
+        status_text.text("Concatenating video segments...")
+        progress_bar.progress(10)
         
-        # Ensure video is exactly 20 seconds
+        final_video = concatenate_videoclips(segment_clips, method="compose")
+        target_duration = 20.0
+        
+        status_text.text("Adjusting video duration...")
+        progress_bar.progress(20)
+        
         if final_video.duration > target_duration:
             final_video = final_video.subclip(0, target_duration)
         elif final_video.duration < target_duration:
-            # If somehow shorter, pad with last frame
             final_video = final_video.set_duration(target_duration)
 
-        # Load and prepare audio clips with proper duration handling
+        # Step 6b: Load audio clips
+        status_text.text("Loading audio files...")
+        progress_bar.progress(30)
+        
         voice_clip = AudioFileClip(voice_path)
         music_clip = AudioFileClip(music_path)
         
-        # Get the actual durations
         voice_duration = voice_clip.duration
         music_duration = music_clip.duration
         video_duration = final_video.duration
         
         st.write(f"Debug info - Video: {video_duration:.2f}s, Voice: {voice_duration:.2f}s, Music: {music_duration:.2f}s")
         
-        # Adjust audio to match video duration exactly
+        # Step 6c: Sync audio durations
+        status_text.text("Synchronizing audio durations...")
+        progress_bar.progress(40)
+        
         if voice_duration > video_duration:
             voice_clip = voice_clip.subclip(0, video_duration)
         elif voice_duration < video_duration:
-            # Pad with silence if voice is shorter
             voice_clip = voice_clip.set_duration(video_duration)
             
         if music_duration > video_duration:
             music_clip = music_clip.subclip(0, video_duration)
         elif music_duration < video_duration:
-            # Loop music if it's shorter than video
             loops_needed = int(video_duration / music_duration) + 1
             music_clip = concatenate_audioclips([music_clip] * loops_needed).subclip(0, video_duration)
         
-        # Ensure all clips have exactly the same duration
-        voice_clip = voice_clip.set_duration(video_duration)
-        music_clip = music_clip.set_duration(video_duration).volumex(0.25)  # Lower music volume
+        # Step 6d: Create composite audio
+        status_text.text("Mixing audio tracks...")
+        progress_bar.progress(50)
         
-        # Create composite audio
+        voice_clip = voice_clip.set_duration(video_duration)
+        music_clip = music_clip.set_duration(video_duration).volumex(0.25)
+        
         final_audio = CompositeAudioClip([voice_clip, music_clip])
         final_audio = final_audio.set_duration(video_duration)
         
-        # Apply audio to video
+        # Step 6e: Combine video and audio
+        status_text.text("Combining video and audio...")
+        progress_bar.progress(60)
+        
         final_video = final_video.set_audio(final_audio)
-
+        
+        # Step 6f: Try multiple encoding approaches
         output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
         
-        # Write with more conservative settings to avoid errors
-        final_video.write_videofile(
-            output_path,
-            codec="libx264",
-            audio_codec="aac",
-            temp_audiofile="temp-audio.m4a",
-            remove_temp=True,
-            fps=24,
-            bitrate="3000k",
-            verbose=False,
-            logger=None  # Suppress moviepy logs
-        )
+        # First try: Standard encoding
+        status_text.text("Encoding final video (attempt 1/3)...")
+        progress_bar.progress(70)
+        
+        try:
+            final_video.write_videofile(
+                output_path,
+                codec="libx264",
+                audio_codec="aac",
+                temp_audiofile="temp-audio.m4a",
+                remove_temp=True,
+                fps=24,
+                bitrate="2000k",
+                verbose=False,
+                logger=None,
+                preset='ultrafast'  # Faster encoding
+            )
+            encoding_success = True
+        except Exception as encoding_error:
+            st.warning(f"Standard encoding failed: {str(encoding_error)[:100]}...")
+            encoding_success = False
+        
+        # Second try: Simpler encoding if first failed
+        if not encoding_success:
+            status_text.text("Encoding final video (attempt 2/3)...")
+            progress_bar.progress(80)
+            
+            try:
+                output_path2 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+                final_video.write_videofile(
+                    output_path2,
+                    codec="libx264",
+                    audio_codec="aac",
+                    fps=24,
+                    verbose=False,
+                    logger=None,
+                    preset='ultrafast',
+                    threads=1  # Single thread to avoid conflicts
+                )
+                output_path = output_path2
+                encoding_success = True
+            except Exception as encoding_error2:
+                st.warning(f"Simplified encoding failed: {str(encoding_error2)[:100]}...")
+        
+        # Third try: Export without audio mixing (fallback)
+        if not encoding_success:
+            status_text.text("Encoding final video (attempt 3/3 - fallback)...")
+            progress_bar.progress(90)
+            
+            try:
+                # Create a simpler version - video only, then add audio separately
+                output_path3 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+                
+                # Export video without audio first
+                video_only = final_video.without_audio()
+                video_only.write_videofile(
+                    output_path3,
+                    codec="libx264",
+                    fps=24,
+                    verbose=False,
+                    logger=None,
+                    preset='ultrafast'
+                )
+                
+                # Then add audio in a separate step
+                from moviepy.editor import VideoFileClip
+                temp_video = VideoFileClip(output_path3)
+                final_with_audio = temp_video.set_audio(final_audio)
+                
+                output_path4 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+                final_with_audio.write_videofile(
+                    output_path4,
+                    codec="libx264",
+                    audio_codec="aac",
+                    verbose=False,
+                    logger=None
+                )
+                
+                output_path = output_path4
+                encoding_success = True
+                
+                # Cleanup temp files
+                temp_video.close()
+                final_with_audio.close()
+                os.remove(output_path3)
+                
+            except Exception as encoding_error3:
+                st.error(f"All encoding attempts failed. Last error: {str(encoding_error3)[:200]}...")
+                encoding_success = False
 
-        st.success("🎬 Your 20-second commercial is ready!")
-        st.video(output_path)
+        progress_bar.progress(100)
         
-        # Summary of created ad
-        st.write("**Ad Summary:**")
-        st.write(f"**Product:** {product_name}")
-        st.write(f"**Target Audience:** {target_audience}")
-        st.write(f"**Tone:** {ad_tone}")
-        st.write(f"**Key Message:** {key_benefits}")
-        
-        st.download_button("📽 Download Final Commercial", output_path, f"{product_name.replace(' ', '_')}_ad.mp4")
+        if encoding_success:
+            status_text.text("✅ Commercial assembly complete!")
+            st.success("🎬 Your 20-second commercial is ready!")
+            st.video(output_path)
+            
+            # Summary of created ad
+            st.write("**Ad Summary:**")
+            st.write(f"**Product:** {product_name}")
+            st.write(f"**Target Audience:** {target_audience}")
+            st.write(f"**Tone:** {ad_tone}")
+            st.write(f"**Key Message:** {key_benefits}")
+            
+            st.download_button("📽 Download Final Commercial", output_path, f"{product_name.replace(' ', '_')}_ad.mp4")
+        else:
+            st.error("❌ Final video encoding failed after multiple attempts.")
+            st.info("💡 You can still download the individual components and combine them manually using video editing software.")
 
         # Clean up clips to free memory
-        final_video.close()
-        voice_clip.close()
-        music_clip.close()
-        for clip in segment_clips:
-            clip.close()
+        try:
+            final_video.close()
+            voice_clip.close()
+            music_clip.close()
+            for clip in segment_clips:
+                clip.close()
+        except:
+            pass  # Ignore cleanup errors
 
     except Exception as e:
+        status_text.text("❌ Assembly failed")
+        progress_bar.progress(0)
         st.warning("Final commercial assembly failed, but you can still download individual components.")
-        st.error(f"Error creating final video: {e}")
-        # Still provide individual downloads even if final assembly fails
+        st.error(f"Error details: {str(e)[:200]}...")
+        
+        # Provide manual assembly instructions
+        st.info("""
+        **Manual Assembly Option:**
+        1. Download all individual components above
+        2. Use video editing software like DaVinci Resolve (free) or Adobe Premiere
+        3. Import all 4 video segments and arrange them in sequence
+        4. Add the voiceover audio track
+        5. Add background music at 25% volume
+        6. Export as MP4
+        """)
+
+    # Clear progress indicators
+    progress_bar.empty()
+    status_text.empty()
 
     # Cleanup temporary files
     for path in (*temp_video_paths, voice_path, music_path, script_file_path):
