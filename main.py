@@ -115,7 +115,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
             "prompt": (
                 f"You are an expert video scriptwriter. Write a clear, engaging, thematically consistent voiceover script for a 20-second educational video titled '{video_topic}'. "
                 "The video will be 20 seconds long; divide your script into 4 segments of approximately 5 seconds each. "
-                "Each segment should be 8-12 words (about 1.5-2 seconds of speech per segment, allowing for pacing). "
+                "Each segment should be 6-10 words (about 1.3-1.8 seconds of speech per segment, allowing for pacing). "
                 "Make sure the 4 segments tell a cohesive, progressive story that builds toward a compelling conclusion. "
                 "Use vivid, concrete language that translates well to visuals. Include specific details, numbers, or comparisons when relevant. "
                 "Label each section clearly as '1:', '2:', '3:', and '4:'. "
@@ -202,7 +202,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
                 "text": cleaned_narration, # Use the cleaned narration here
                 "voice_id": voice_options[selected_voice],
                 "emotion": selected_emotion,
-                "speed": 1.3,
+                "speed": 1.2,
                 "pitch": 0,
                 "volume": 1,
                 "bitrate": 128000,
@@ -248,7 +248,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
 
         # Better volume balancing
         voice_volume = 1.0
-        music_volume = 0.2  # Lower music volume for better voice clarity
+        music_volume = 0.3  # Lower music volume for better voice clarity
 
         # Fade in/out for music
         music_clip = music_clip.volumex(music_volume).audio_fadein(1).audio_fadeout(1)
