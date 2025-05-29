@@ -1,254 +1,171 @@
 import streamlit as st
-import replicate
-import os
+
+st.set_page_config(page_title="AI Video Creator", layout="centered")
+
+st.title("AI-Powered 20-Second Video Creator")
+st.markdown(
+    """
+    Enter your Replicate API key and a video topic. The app will:
+    1. Write a script for a 20-second video on your topic.
+    2. Break the script into 4 timed sections.
+    3. Generate 4 videos (5 seconds each) using Replicate's Luma Ray Flash.
+    4. Concatenate the videos.
+    5. Generate a voiceover and music.
+    6. Combine everything into a single, cohesive 20-second video.
+    """
+)
+
+with st.form("video_form"):
+    api_key = st.text_input("Replicate API Key", type="password")
+    topic = st.text_input("Video Topic", placeholder="e.g. why the earth rotates")
+    submitted = st.form_submit_button("Create Video")
+
 import requests
-import zipfile
-import io
-from datetime import datetime
+import time
+import tempfile
+import os
+from moviepy.editor import VideoFileClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
 
-# Set page config
-st.set_page_config(page_title="AI Video Generator", page_icon="🎬", layout="wide")
+def call_replicate(api_key, version, input_dict):
+    url = f"https://api.replicate.com/v1/predictions"
+    headers = {
+        "Authorization": f"Token {api_key}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "version": version,
+        "input": input_dict
+    }
+    response = requests.post(url, json=data, headers=headers)
+    response.raise_for_status()
+    prediction = response.json()
+    prediction_id = prediction["id"]
 
-def download_video(url, filename):
-    """Download video from URL"""
-    try:
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        
-        with open(filename, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        return True
-    except Exception as e:
-        st.error(f"Error downloading {filename}: {str(e)}")
-        return False
+    # Poll for completion
+    while prediction["status"] not in ["succeeded", "failed", "canceled"]:
+        time.sleep(2)
+        poll = requests.get(f"{url}/{prediction_id}", headers=headers)
+        poll.raise_for_status()
+        prediction = poll.json()
+    if prediction["status"] != "succeeded":
+        raise Exception(f"Replicate prediction failed: {prediction['status']}")
+    return prediction["output"]
 
-def create_zip_file(video_files):
-    """Create a zip file containing all videos"""
-    zip_buffer = io.BytesIO()
-    
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for video_file in video_files:
-            if os.path.exists(video_file):
-                zip_file.write(video_file, os.path.basename(video_file))
-    
-    zip_buffer.seek(0)
-    return zip_buffer
+def download_file(url, suffix):
+    response = requests.get(url)
+    response.raise_for_status()
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp.write(response.content)
+    tmp.close()
+    return tmp.name
 
-def generate_video_with_model(prompt, model_name, model_identifier, duration=None):
-    """Generate video using specified model"""
-    try:
-        st.write(f"🎬 Generating video with {model_name}...")
-        
-        # Different input parameters for different models
-        if "runway" in model_identifier.lower():
-            input_params = {
-                "prompt": prompt,
-            }
-            if duration:
-                input_params["duration"] = duration
-        elif "zeroscope" in model_identifier.lower():
-            input_params = {
-                "prompt": prompt,
-                "num_frames": 24 if duration and duration <= 3 else 40,
-                "num_inference_steps": 50
-            }
-        elif "stable-video" in model_identifier.lower():
-            input_params = {
-                "input": prompt,  # Some models use 'input' instead of 'prompt'
-            }
-            if duration:
-                input_params["video_length"] = duration
-        else:
-            # Generic parameters
-            input_params = {
-                "prompt": prompt,
-            }
-            if duration:
-                input_params["duration"] = duration
-        
-        output = replicate.run(model_identifier, input=input_params)
-        
-        # Handle different output formats
-        if isinstance(output, list) and len(output) > 0:
-            video_url = output[0] if isinstance(output[0], str) else str(output[0])
-        elif isinstance(output, str):
-            video_url = output
-        elif hasattr(output, 'url'):
-            video_url = output.url
-        else:
-            video_url = str(output)
-        
-        return video_url
-        
-    except Exception as e:
-        error_msg = str(e)
-        st.error(f"❌ {model_name} generation failed: {error_msg}")
-        return None
+if submitted:
+    if not api_key or not topic:
+        st.error("Please provide both your Replicate API key and a video topic.")
+    else:
+        st.info("Starting multi-agent video creation process...")
 
-# Available models with their correct identifiers
-AVAILABLE_MODELS = {
-    "Zeroscope V2 XL": "anotherjesse/zeroscope-v2-xl",
-    "Stable Video Diffusion": "stability-ai/stable-video-diffusion",
-    "Text2Video Zero": "cjwbw/text2video-zero",
-    "Runway ML": "runwayml/stable-video-diffusion"  # Check if this is available
-}
+        # 1. Script writing (Claude 4 Sonnet)
+        st.write("Generating script...")
+        try:
+            script_output = call_replicate(
+                api_key,
+                "b8b6b6e8b1e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",  # Placeholder version
+                {
+                    "prompt": f"Write a script for a 20 second educational video on: {topic}. The script should be split into 4 sections, each 5 seconds, and clearly indicate the text for each section."
+                }
+            )
+            # Assume output is a string with 4 sections
+            script_sections = script_output.split("\n\n")
+            if len(script_sections) < 4:
+                st.error("Script generation failed to produce 4 sections.")
+                st.stop()
+        except Exception as e:
+            st.error(f"Script generation failed: {e}")
+            st.stop()
 
-# Streamlit UI
-st.title("🎬 AI Video Generator")
-st.write("Generate multiple videos simultaneously using different AI models!")
+        st.success("Script generated!")
+        for i, section in enumerate(script_sections):
+            st.markdown(f"**Section {i+1}:** {section}")
 
-# API Key input
-api_key = st.text_input("Enter your Replicate API Token:", type="password")
+        # 2. Generate 4 videos (Luma Ray Flash 2)
+        video_urls = []
+        for i, section in enumerate(script_sections):
+            st.write(f"Generating video for section {i+1}...")
+            try:
+                video_url = call_replicate(
+                    api_key,
+                    "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",  # Placeholder version
+                    {
+                        "prompt": f"Create a 5 second video for: {section}",
+                        "duration": 5
+                    }
+                )
+                video_urls.append(video_url)
+            except Exception as e:
+                st.error(f"Video generation failed for section {i+1}: {e}")
+                st.stop()
 
-if api_key:
-    os.environ["REPLICATE_API_TOKEN"] = api_key
-    
-    # Input section
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        prompt = st.text_area(
-            "Video Prompt:", 
-            placeholder="Describe the video you want to generate...",
-            height=100
-        )
-    
-    with col2:
-        st.write("**Settings:**")
-        
-        # Model selection
-        selected_models = st.multiselect(
-            "Select Models:",
-            options=list(AVAILABLE_MODELS.keys()),
-            default=["Zeroscope V2 XL", "Stable Video Diffusion"]
-        )
-        
-        duration = st.selectbox(
-            "Video Duration (seconds):",
-            options=[3, 5, 8, 10],
-            index=0
-        )
-        
-        num_videos = st.slider(
-            "Number of variations per model:",
-            min_value=1,
-            max_value=3,
-            value=1
-        )
-    
-    # Generate button
-    if st.button("🎬 Generate Videos", type="primary"):
-        if not prompt.strip():
-            st.error("Please enter a video prompt!")
-        elif not selected_models:
-            st.error("Please select at least one model!")
-        else:
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            total_videos = len(selected_models) * num_videos
-            current_video = 0
-            
-            video_results = []
-            successful_videos = []
-            
-            # Create columns for video display
-            if total_videos <= 2:
-                video_cols = st.columns(total_videos)
-            else:
-                video_cols = st.columns(3)
-            
-            for model_idx, model_name in enumerate(selected_models):
-                model_identifier = AVAILABLE_MODELS[model_name]
-                
-                for variation in range(num_videos):
-                    current_video += 1
-                    progress = current_video / total_videos
-                    progress_bar.progress(progress)
-                    status_text.text(f"Generating video {current_video}/{total_videos} - {model_name} (Variation {variation + 1})")
-                    
-                    # Generate video
-                    video_url = generate_video_with_model(prompt, model_name, model_identifier, duration)
-                    
-                    if video_url:
-                        video_results.append({
-                            'model': model_name,
-                            'variation': variation + 1,
-                            'url': video_url,
-                            'filename': f"{model_name.replace(' ', '_')}_v{variation + 1}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-                        })
-                        
-                        # Display video in appropriate column
-                        col_idx = (current_video - 1) % len(video_cols)
-                        with video_cols[col_idx]:
-                            st.write(f"**{model_name} - Variation {variation + 1}**")
-                            st.video(video_url)
-                            
-                            # Download button for individual video
-                            if st.button(f"📥 Download", key=f"download_{current_video}"):
-                                if download_video(video_url, video_results[-1]['filename']):
-                                    st.success(f"Downloaded: {video_results[-1]['filename']}")
-            
-            progress_bar.progress(1.0)
-            status_text.text("✅ Generation complete!")
-            
-            # Results summary
-            if video_results:
-                st.success(f"🎉 Successfully generated {len(video_results)} videos!")
-                
-                # Download all videos button
-                st.write("### 📦 Download All Videos")
-                
-                if st.button("📥 Download All as ZIP"):
-                    with st.spinner("Preparing download..."):
-                        # Download all videos
-                        downloaded_files = []
-                        for result in video_results:
-                            if download_video(result['url'], result['filename']):
-                                downloaded_files.append(result['filename'])
-                        
-                        if downloaded_files:
-                            # Create ZIP file
-                            zip_buffer = create_zip_file(downloaded_files)
-                            
-                            # Provide download button
-                            st.download_button(
-                                label="📦 Download ZIP File",
-                                data=zip_buffer.getvalue(),
-                                file_name=f"ai_videos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                                mime="application/zip"
-                            )
-                            
-                            # Clean up individual files
-                            for file in downloaded_files:
-                                try:
-                                    os.remove(file)
-                                except:
-                                    pass
-                        else:
-                            st.error("Failed to download videos for ZIP creation.")
-                
-                # Display generation details
-                with st.expander("📊 Generation Details"):
-                    for result in video_results:
-                        st.write(f"- **{result['model']}** (Variation {result['variation']}): [View Video]({result['url']})")
-            
-            else:
-                st.error("❌ No videos were generated successfully. Please check your API token and try again.")
+        # Download and concatenate videos
+        st.write("Concatenating videos...")
+        video_files = []
+        for url in video_urls:
+            video_files.append(download_file(url, ".mp4"))
+        clips = [VideoFileClip(f) for f in video_files]
+        final_video = concatenate_videoclips(clips, method="compose")
+        temp_video_path = tempfile.mktemp(suffix=".mp4")
+        final_video.write_videofile(temp_video_path, codec="libx264", audio=False, fps=24)
+        for clip in clips:
+            clip.close()
 
-else:
-    st.info("👆 Please enter your Replicate API token to get started!")
-    
-    with st.expander("ℹ️ How to get your Replicate API Token"):
-        st.write("""
-        1. Go to [Replicate.com](https://replicate.com)
-        2. Sign up or log in to your account
-        3. Go to your account settings
-        4. Find the "API Tokens" section
-        5. Copy your token and paste it above
-        """)
+        # 3. Generate voiceover (Minimax Speech)
+        st.write("Generating voiceover...")
+        try:
+            voiceover_url = call_replicate(
+                api_key,
+                "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",  # Placeholder version
+                {
+                    "text": "\n".join(script_sections),
+                    "duration": 20
+                }
+            )
+            voiceover_file = download_file(voiceover_url, ".mp3")
+        except Exception as e:
+            st.error(f"Voiceover generation failed: {e}")
+            st.stop()
 
-# Footer
-st.markdown("---")
-st.markdown("🎬 **AI Video Generator** - Generate amazing videos with AI!")
+        # 4. Generate music (Google Lyria 2)
+        st.write("Generating background music...")
+        try:
+            music_url = call_replicate(
+                api_key,
+                "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",  # Placeholder version
+                {
+                    "prompt": f"Background music for a 20 second video about: {topic}",
+                    "duration": 20
+                }
+            )
+            music_file = download_file(music_url, ".mp3")
+        except Exception as e:
+            st.error(f"Music generation failed: {e}")
+            st.stop()
+
+        # 5. Combine video, voiceover, and music
+        st.write("Combining video, voiceover, and music...")
+        try:
+            video_clip = VideoFileClip(temp_video_path)
+            voiceover_clip = AudioFileClip(voiceover_file)
+            music_clip = AudioFileClip(music_file).volumex(0.3)
+            composite_audio = CompositeAudioClip([music_clip, voiceover_clip])
+            final = video_clip.set_audio(composite_audio)
+            final_path = tempfile.mktemp(suffix=".mp4")
+            final.write_videofile(final_path, codec="libx264", audio_codec="aac", fps=24)
+            video_clip.close()
+            voiceover_clip.close()
+            music_clip.close()
+        except Exception as e:
+            st.error(f"Failed to combine video and audio: {e}")
+            st.stop()
+
+        st.success("Video creation complete!")
+        st.video(final_path)
