@@ -202,7 +202,7 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
                 "text": cleaned_narration, # Use the cleaned narration here
                 "voice_id": voice_options[selected_voice],
                 "emotion": selected_emotion,
-                "speed": 2,
+                "speed": 1.5,
                 "pitch": 0,
                 "volume": 1,
                 "bitrate": 128000,
