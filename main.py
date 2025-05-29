@@ -2,7 +2,6 @@ import streamlit as st
 import replicate
 import tempfile
 import os
-import re
 import requests
 from moviepy.editor import (
     VideoFileClip,
@@ -36,10 +35,11 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
         },
     )
 
-    # --- Robust script parsing using regex ---
     script_text = "".join(full_script) if isinstance(full_script, list) else full_script
-    matches = re.findall(r"\b[1-4]:\s*(.+?)(?=\n[1-4]:|\Z)", script_text, re.DOTALL)
-    script_segments = [m.strip().replace('\n', ' ') for m in matches]
+    script_segments = []
+    for line in script_text.strip().split("\n"):
+        if any(line.strip().startswith(f"{i}:") for i in range(1, 5)):
+            script_segments.append(line.split(":", 1)[1].strip())
 
     if len(script_segments) < 4:
         st.error("Failed to extract 4 clear script segments. Please try again or rephrase your topic.")
@@ -75,35 +75,10 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
 
     # Step 3: Concatenate videos
     st.info("Step 3: Concatenating video segments")
-    clips = []
-    fallback_duration = 1.0  # fallback if duration is missing
-    for i, path in enumerate(temp_video_paths):
-        try:
-            clip = VideoFileClip(path)
-            if not clip.duration:
-                st.warning(f"Clip {i+1} has no duration. Assigning fallback duration.")
-                clip = clip.set_duration(fallback_duration)
-
-            if clip.audio is None:
-                clip = clip.set_audio(None)
-
-            clips.append(clip)
-        except Exception as e:
-            st.error(f"Failed to load clip {i+1}: {e}")
-            st.stop()
-
-    try:
-        final_video = concatenate_videoclips(clips, method="compose")
-    except Exception as e:
-        st.error(f"Concatenation failed: {e}")
-        st.stop()
-
+    clips = [VideoFileClip(path) for path in temp_video_paths]
+    final_video = concatenate_videoclips(clips, method="compose")
     final_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-    try:
-        final_video.write_videofile(final_video_path, codec="libx264", audio=False)
-    except Exception as e:
-        st.error(f"Error writing concatenated video: {e}")
-        st.stop()
+    final_video.write_videofile(final_video_path, codec="libx264", audio=False)
     st.success("Video visuals compiled")
 
     # Step 4: Generate voiceover
@@ -133,31 +108,26 @@ if replicate_api_key and video_topic and st.button("Generate 20s Video"):
 
     # Step 6: Merge audio tracks with video
     st.info("Step 6: Merging final audio and video")
+    video_clip = VideoFileClip(final_video_path)
+    duration = video_clip.duration
+
+    voice_clip = AudioFileClip(voice_path).subclip(0, duration).set_duration(duration)
+    music_clip = AudioFileClip(music_path).subclip(0, duration).set_duration(duration).volumex(0.3)
+
+    final_audio = CompositeAudioClip([voice_clip, music_clip])
+    video_with_audio = video_clip.set_audio(final_audio)
+
+    output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
     try:
-        video_clip = VideoFileClip(final_video_path)
-        duration = video_clip.duration
-
-        voice_clip = AudioFileClip(voice_path).subclip(0, duration).set_duration(duration)
-        music_clip = AudioFileClip(music_path).subclip(0, duration).set_duration(duration).volumex(0.3)
-
-        final_audio = CompositeAudioClip([voice_clip, music_clip])
-        video_with_audio = video_clip.set_audio(final_audio)
-
-        output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
         video_with_audio.write_videofile(
-            output_path,
-            codec="libx264",
-            audio_codec="aac",
-            temp_audiofile="temp-audio.m4a",
-            remove_temp=True
+            output_path, codec="libx264", audio_codec="aac", temp_audiofile="temp-audio.m4a", remove_temp=True
         )
-
-        st.success("🎬 Final video with narration and music is ready")
-        st.video(output_path)
-
     except Exception as e:
-        st.error(f"Error writing final video with audio: {e}")
+        st.error(f"Error writing final video: {e}")
         st.stop()
+
+    st.success("🎬 Final video with narration and music is ready")
+    st.video(output_path)
 
     # Cleanup
     for path in (*temp_video_paths, final_video_path, voice_path, music_path):
